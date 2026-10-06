@@ -302,44 +302,5 @@ for(let i=bombs.length-1;i>=0;i--){ const b=bombs[i]; b.vy-=70*dt;
 b.mesh.position.addScaledVector(b.vx,dt); b.mesh.position.y+=b.vy*dt;
 if(b.mesh.position.y<=0.5){ spawnExplosion(new THREE.Vector3(b.mesh.position.x,0.5,b.mesh.position.z)); scene.remove(b.mesh); bombs.splice(i,1); } }
 }
-function spawnExplosion(pos) { playSound('explosion'); const blast = new THREE.Mesh((window.__BG||(window.__BG=new THREE.SphereGeometry(6,10,8))), new THREE.MeshBasicMaterial({color: 0xff6600, transparent:true, opacity:0.9})); blast.position.copy(pos); scene.add(blast); soldiers.concat(vehicles, tanks, boats).forEach(u => { if(u.hp > 0 && u.mesh.position.distanceTo(pos) < 14) { u.hp -= 400; if(u.hp <= 0 && u.bodyMat) u.bodyMat.color.setHex(0x1a1a1a); if(u.hp <= 0 && u.type==='soldier') { u.mesh.position.y = -0.5; u.respawnTimer = 0; } } }); let s = 1; const anim = setInterval(() => { s += 0.3; blast.scale.set(s,s,s); blast.material.opacity -= 0.1; if(blast.material.opacity <= 0) { scene.remove(blast); clearInterval(anim); } }, 30); } function animate() { requestAnimationFrame(animate); const rawD = clock.getDelta(), delta = Math.min(rawD, 0.05); perfAdapt(rawD); if(directControlActive && directControlUnit) { cameraTarget.lerp(directControlUnit.mesh.position, 0.1); } else { const speed = 50 * delta; let rightX = Math.cos(cameraAngle), rightZ = -Math.sin(cameraAngle); let fwdX = Math.sin(cameraAngle), fwdZ = Math.cos(cameraAngle); if (keys.w) { cameraTarget.x -= fwdX * speed; cameraTarget.z -= fwdZ * speed; } if (keys.s) { cameraTarget.x += fwdX * speed; cameraTarget.z += fwdZ * speed; } if (keys.a) { cameraTarget.x -= rightX * speed; cameraTarget.z -= rightZ * speed; } if (keys.d) { cameraTarget.x += rightX * speed; cameraTarget.z += rightZ * speed; } } if (keys.q) cameraAngle -= 2 * delta; if (keys.e) cameraAngle += 2 * delta; cameraPitch+=((directControlActive?0.55:1)-cameraPitch)*0.1; document.getElementById('touch').style.display=directControlActive?'block':'none'; updateJets(delta); updateCameraPosition(); updateAI(delta); fpCamera(); renderer.render(scene, camera); } </script><script>
-/* Cargador de mods */
-window.RF = {
-  mods: {},
-  register: function(id, mod){
-    if(this.mods[id] && this.mods[id].dispose) try{ this.mods[id].dispose(); }catch(e){}
-    this.mods[id] = mod;
-    if(mod.init) try{ mod.init(); }catch(e){ console.error('[mod]'+id, e); }
-    console.log('[mod] ✓ ' + id);
-  },
-  update: function(dt){
-    for(const id in this.mods){
-      const m = this.mods[id];
-      if(m.update) try{ m.update(dt); }catch(e){ console.error('[mod]'+id, e); }
-    }
-  }
-};
-
-// Enlaza el update de mods al bucle principal
-const __prevAI = window.updateAI;
-window.updateAI = function(dt){
-  if(__prevAI) __prevAI(dt);
-  RF.update(dt);
-};
-
-// Carga mods desde mods/mods.json
-window.addEventListener('load', async function(){
-  try{
-    const res = await fetch('mods/mods.json');
-    const list = await res.json();
-    for(const name of list){
-      const s = document.createElement('script');
-      s.src = 'mods/' + name + '.js';
-      document.body.appendChild(s);
-    }
-    console.log('[RF] Mods a cargar: ' + list.join(', '));
-  }catch(e){
-    console.log('[RF] Sin mods');
-  }
-});
-</script> </body> </html> 
+function spawnExplosion(pos) { playSound('explosion'); const blast = new THREE.Mesh((window.__BG||(window.__BG=new THREE.SphereGeometry(6,10,8))), new THREE.MeshBasicMaterial({color: 0xff6600, transparent:true, opacity:0.9})); blast.position.copy(pos); scene.add(blast); soldiers.concat(vehicles, tanks, boats).forEach(u => { if(u.hp > 0 && u.mesh.position.distanceTo(pos) < 14) { u.hp -= 400; if(u.hp <= 0 && u.bodyMat) u.bodyMat.color.setHex(0x1a1a1a); if(u.hp <= 0 && u.type==='soldier') { u.mesh.position.y = -0.5; u.respawnTimer = 0; } } }); let s = 1; const anim = setInterval(() => { s += 0.3; blast.scale.set(s,s,s); blast.material.opacity -= 0.1; if(blast.material.opacity <= 0) { scene.remove(blast); clearInterval(anim); } }, 30); } function animate() { requestAnimationFrame(animate); const rawD = clock.getDelta(), delta = Math.min(rawD, 0.05); perfAdapt(rawD); if(directControlActive && directControlUnit) { cameraTarget.lerp(directControlUnit.mesh.position, 0.1); } else { const speed = 50 * delta; let rightX = Math.cos(cameraAngle), rightZ = -Math.sin(cameraAngle); let fwdX = Math.sin(cameraAngle), fwdZ = Math.cos(cameraAngle); if (keys.w) { cameraTarget.x -= fwdX * speed; cameraTarget.z -= fwdZ * speed; } if (keys.s) { cameraTarget.x += fwdX * speed; cameraTarget.z += fwdZ * speed; } if (keys.a) { cameraTarget.x -= rightX * speed; cameraTarget.z -= rightZ * speed; } if (keys.d) { cameraTarget.x += rightX * speed; cameraTarget.z += rightZ * speed; } } if (keys.q) cameraAngle -= 2 * delta; if (keys.e) cameraAngle += 2 * delta; cameraPitch+=((directControlActive?0.55:1)-cameraPitch)*0.1; document.getElementById('touch').style.display=directControlActive?'block':'none'; updateJets(delta); updateCameraPosition(); updateAI(delta); fpCamera(); renderer.render(scene, camera); } </script>
+ </body> </html> 
