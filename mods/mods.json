@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "nombre": "Mod de Camiones",
+    "archivo": "mods/trucks.js",
+    "activo": true
+  }
+]
