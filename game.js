@@ -1,6 +1,8 @@
 /* ============================================================
-   IRONFRONT RTS — CORE GAME.JS
-   Extraído de index.html para mantener el HTML limpio.
+   IRONFRONT RTS — CORE GAME.JS v2.0
+   - Soporte para Control Directo de CUALQUIER vehículo
+   - Aviones/helis del mod, botes, artillería, etc.
+   - Camaras especializadas por tipo de vehículo
    ============================================================ */
 
 /* ============ AUDIO ============ */
@@ -70,7 +72,7 @@ let mouse = new THREE.Vector2();
 let cameraTarget = new THREE.Vector3(0, 0, 0);
 let cameraZoom = 70;
 let cameraAngle = 0;
-const keys = { w: false, a: false, s: false, d: false, q: false, e: false, c: false };
+const keys = { w: false, a: false, s: false, d: false, q: false, e: false, c: false, space: false, shift: false };
 let airstrikeMode = false, airstrikeReady = true;
 let directControlActive = false;
 let directControlUnit = null;
@@ -89,8 +91,56 @@ const PG=new THREE.SphereGeometry(0.5,6,6), PM={};
 const transports=[];
 let fpGuns=null;
 let fpYaw=0,fpPitch=0,lookId=null,lastLX=0,lastLY=0;
+// Throttle para aviones/helis (control directo)
+let dcThrottle = 0;
+let dcLastPos = new THREE.Vector3();
+let dcVel = new THREE.Vector3();
 
 window.onload = init;
+
+/* ============ HELPER: obtener TODAS las unidades aliadas ============ */
+function getAllAllies() {
+  const out = soldiers.concat(vehicles, tanks, transports, aiHelis, boats);
+  if (window.MejoraMundo) {
+    if (window.MejoraMundo.planes) out.push(...window.MejoraMundo.planes);
+    if (window.MejoraMundo.helis) out.push(...window.MejoraMundo.helis);
+  }
+  if (window.IAMejorada && window.IAMejorada.artillerias) {
+    out.push(...window.IAMejorada.artillerias);
+  }
+  return out;
+}
+
+/* ============ HELPER: obtener unidad desde mesh ============ */
+function getUnitFromMesh(obj) {
+  let root = obj;
+  while (root.parent && root.parent.type !== "Scene" && !root.userData.type && !root.userData.mesh && !root.userData.turret && !root.userData.rotor && !root.userData.rw && !root.userData.kind) {
+    root = root.parent;
+  }
+  // Buscar userData en jerarquía
+  if (root.userData && (root.userData.type || root.userData.mesh || root.userData.turret || root.userData.rotor || root.userData.rw || root.userData.kind)) {
+    return root.userData;
+  }
+  // Fallback: buscar en el primer hijo
+  if (root.children && root.children[0] && root.children[0].userData && (root.children[0].userData.type || root.children[0].userData.mesh)) {
+    return root.children[0].userData;
+  }
+  return null;
+}
+
+/* ============ HELPER: tipo de unidad ============ */
+function getUnitCategory(u) {
+  if (!u) return 'unknown';
+  if (u.type === 'soldier') return 'soldier';
+  if (u.type === 'tank') return 'tank';
+  if (u.type === 'apc' && u.isArtilleria) return 'artillery';
+  if (u.type === 'apc') return 'apc';
+  if (u.type === 'plane' || u.rw) return 'plane';
+  if (u.type === 'heli' || (u.rotorMain && u.turret)) return 'heli';
+  if (u.kind === 'transport' || u.kind === 'warship') return 'boat';
+  if (u.type === 'transport' && u.rotor) return 'heli_transport';
+  return u.type || 'unknown';
+}
 
 /* ============ INIT ============ */
 function init() {
@@ -145,7 +195,7 @@ function init() {
 
   /* ====== API PARA MODS ====== */
   window.IronfrontAPI = {
-    version: '1.0.0',
+    version: '2.0.0',
     scene: scene,
     camera: camera,
     renderer: renderer,
@@ -164,6 +214,9 @@ function init() {
     fireProjectile: fireProjectile,
     say: say,
     playSound: playSound,
+    // Expuesto para mods:
+    directControlActive: () => directControlActive,
+    directControlUnit: () => directControlUnit,
     onUpdate: null
   };
 
@@ -319,7 +372,7 @@ function createEnvironment() {
 function isColliding(pos, radius) { if(pos.x+radius>SHORE) return true; for(let i=0;i<houses.length;i++){ const h=houses[i]; if(pos.x+radius>h.min.x && pos.x-radius<h.max.x && pos.z+radius>h.min.z && pos.z-radius<h.max.z) return true; } return false; }
 function bulletBlocked(p){ for(let i=0;i<bwalls.length;i++){ const w=bwalls[i]; if(p.x>w.x0&&p.x<w.x1&&p.z>w.z0&&p.z<w.z1) return true; } return false; }
 function losClear(a,b){ const dx=b.x-a.x,dz=b.z-a.z,n=Math.max(2,Math.floor(Math.hypot(dx,dz)/2.5)); for(let i=1;i<n;i++){ _lp.set(a.x+dx*i/n,0,a.z+dz*i/n); if(bulletBlocked(_lp)) return false; } return true; }
-function tryMove(u,np){ const p=u.mesh.position,r=u.radius; if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
+function tryMove(u,np){ const p=u.mesh.position,r=u.radius||1; if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
 function releaseSlot(u){ if(u.slot){ if(u.slot.occ===u) u.slot.occ=null; u.slot=null; } }
 function exitPath(s){ return [new THREE.Vector3(s.hx,1,s.hz+2.5),new THREE.Vector3(s.hx,1,s.hz+8.5),new THREE.Vector3(s.hx+9.5,1,s.hz+9.5)]; }
 function enterPath(p,hx,hz){ const pts=[]; if(p.z<hz+9){ const sx=p.x>=hx?1:-1; if(Math.abs(p.x-hx)<9.5) pts.push(new THREE.Vector3(hx+sx*9.5,1,p.z)); pts.push(new THREE.Vector3(hx+sx*9.5,1,hz+9.5)); } pts.push(new THREE.Vector3(hx,1,hz+8.5),new THREE.Vector3(hx,1,hz+2.5)); return pts; }
@@ -361,6 +414,7 @@ function createBoat(team,kind,idx){
   g.position.set(tr?205:195,0,sg*(tr?65:100)); g.rotation.y=-Math.PI/2; scene.add(g);
   const b={mesh:g,team:team,kind:kind,idx:idx,hp:hp,maxHp:hp,radius:radius,speed:speed,hpYOffset:7,hpWidth:7,state:tr?'load':'patrol',timer:0,unT:0,stT:0,crew:crew,crewN:n,crewMax:n,tint:tintM,marines:[],cargo:[],
   pad:new THREE.Vector3(205,0,sg*65),land:new THREE.Vector3(SHORE+9,0,sg*45),station:new THREE.Vector3(172,0,sg*55),loaded:false,isDead:false,sunk:false,respawnT:0,cd:3,boardCD:0,boarding:null,leader:false,tickT:0,plank:null,sinkT:0,bobP:Math.random()*6,spawn:g.position.clone()};
+  g.userData = b;
   addHealthBar(b,7,7);
   if(tr) for(let i=0;i<4;i++){ spawnSoldier(b.pad.x,b.pad.z,TEAMC[team],team,i===3?'rocket':'rifle'); const m=soldiers[soldiers.length-1]; m.marine=b; m.hp=0; m.isDead=true; m.mesh.visible=false; m.mesh.position.y=-0.5; b.marines.push(m); }
   boats.push(b);
@@ -394,6 +448,9 @@ function updateBoats(dt){
   for(let i=0;i<boats.length;i++) for(let j=i+1;j<boats.length;j++){ const a=boats[i],c=boats[j];
   if(a.team!==c.team&&!a.isDead&&!c.isDead&&!a.boarding&&!c.boarding&&a.boardCD<=0&&c.boardCD<=0&&Math.hypot(a.mesh.position.x-c.mesh.position.x,a.mesh.position.z-c.mesh.position.z)<15) startBoard(a,c); }
   for(const b of boats){
+    // ⚠️ Si el jugador controla este bote, no aplicar IA
+    if (directControlActive && directControlUnit === b) continue;
+
     const P=b.mesh.position; b.cd-=dt; b.boardCD-=dt;
     if(b.isDead||b.hp<=0){ if(!b.sunk){ b.sunk=true; b.isDead=true; b.sinkT=0; b.respawnT=0; endBoard(b); killCargo(b); }
     b.sinkT+=dt; P.y=-b.sinkT*1.5; b.mesh.rotation.z=Math.min(0.5,b.sinkT*0.15); if(b.sinkT>4) b.mesh.visible=false; b.respawnT+=dt; if(b.respawnT>25) reviveBoat(b); continue; }
@@ -432,9 +489,9 @@ function addHealthBar(unit, yOffset, width) { const hpGroup = new THREE.Group();
 /* ============ UNIDADES ============ */
 function spawnSoldier(x, z, color, team, role) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: color })); mesh.position.set(x, 1, z); mesh.castShadow = false; scene.add(mesh); { const rk=role==='rocket'; const gm=new THREE.Mesh(rk?new THREE.BoxGeometry(0.35,0.35,1.9):new THREE.BoxGeometry(0.18,0.2,1.3),new THREE.MeshLambertMaterial({color:rk?0x556b2f:0x1a1a1a})); gm.position.set(0.55,rk?0.6:0.2,0.8); mesh.add(gm); } const unit = { type: 'soldier', role: role, weapon: role==='rocket'?4:1, mesh: mesh, team: team, hp: role==='rocket'?120:100, maxHp: role==='rocket'?120:100, target: new THREE.Vector3(x, 1, z), manualTarget: false, cooldown: 0, radius: 0.8, speed: 5.5, basePos: new THREE.Vector3(x, 1, z), respawnTimer: 0 }; mesh.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 1.8, 1.5); soldiers.push(unit); }
 
-function createAPC(color, team, startX, startZ) { const apcGroup = new THREE.Group(); const bodyMat = new THREE.MeshLambertMaterial({ color: color }); const body = new THREE.Mesh(new THREE.BoxGeometry(3.8, 2, 7.5), bodyMat); body.position.y = 1.2; body.castShadow = true; apcGroup.add(body); const wMat = new THREE.MeshLambertMaterial({ color: 0x111111 }); for(let x=-1; x<=1; x+=2) { for(let z=-2; z<=2; z+=2) { const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.6, 12), wMat); wheel.rotation.z = Math.PI/2; wheel.position.set(x*2, 0.8, z*1.3); wheel.castShadow=true; apcGroup.add(wheel); } } const turret = new THREE.Group(); turret.position.set(0, 2.4, 0); const tMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 2), bodyMat); tMesh.castShadow = true; turret.add(tMesh); const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 8), new THREE.MeshLambertMaterial({ color: 0x333333 })); cannon.rotation.x = Math.PI / 2; cannon.position.set(0, 0, 1.8); cannon.castShadow = true; turret.add(cannon); apcGroup.add(turret); apcGroup.position.set(startX, 0, startZ); scene.add(apcGroup); const unit = { type: 'apc', mesh: apcGroup, turret: turret, bodyMat: bodyMat, originalColor: color, team: team, speed: 10, hp: 350, maxHp: 350, target: new THREE.Vector3(startX, 0, startZ), manualTarget: false, cooldown: 0, isDead: false, radius: 2.5, respawnTimer: 0, basePos: new THREE.Vector3(startX, 0, startZ) }; body.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 3.2, 3.5); vehicles.push(unit); }
+function createAPC(color, team, startX, startZ) { const apcGroup = new THREE.Group(); const bodyMat = new THREE.MeshLambertMaterial({ color: color }); const body = new THREE.Mesh(new THREE.BoxGeometry(3.8, 2, 7.5), bodyMat); body.position.y = 1.2; body.castShadow = true; apcGroup.add(body); const wMat = new THREE.MeshLambertMaterial({ color: 0x111111 }); for(let x=-1; x<=1; x+=2) { for(let z=-2; z<=2; z+=2) { const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.6, 12), wMat); wheel.rotation.z = Math.PI/2; wheel.position.set(x*2, 0.8, z*1.3); wheel.castShadow=true; apcGroup.add(wheel); } } const turret = new THREE.Group(); turret.position.set(0, 2.4, 0); const tMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 2), bodyMat); tMesh.castShadow = true; turret.add(tMesh); const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 8), new THREE.MeshLambertMaterial({ color: 0x333333 })); cannon.rotation.x = Math.PI / 2; cannon.position.set(0, 0, 1.8); cannon.castShadow = true; turret.add(cannon); apcGroup.add(turret); apcGroup.position.set(startX, 0, startZ); scene.add(apcGroup); const unit = { type: 'apc', mesh: apcGroup, turret: turret, bodyMat: bodyMat, originalColor: color, team: team, speed: 10, hp: 350, maxHp: 350, target: new THREE.Vector3(startX, 0, startZ), manualTarget: false, cooldown: 0, isDead: false, radius: 2.5, respawnTimer: 0, basePos: new THREE.Vector3(startX, 0, startZ) }; body.userData = unit; apcGroup.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 3.2, 3.5); vehicles.push(unit); }
 
-function createTank(color, team, startX, startZ) { const tankGroup = new THREE.Group(); const bodyMat = new THREE.MeshLambertMaterial({ color: color }); const body = new THREE.Mesh(new THREE.BoxGeometry(4.8, 1.6, 7.5), bodyMat); body.position.y = 1; body.castShadow = true; tankGroup.add(body); const slope = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.8, 2), bodyMat); slope.rotation.x = Math.PI/6; slope.position.set(0, 1.4, 3.5); tankGroup.add(slope); const tMat = new THREE.MeshLambertMaterial({ color: 0x222222 }); const lTrack = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 8), tMat); lTrack.position.set(-2.8, 0.7, 0); tankGroup.add(lTrack); const rTrack = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 8), tMat); rTrack.position.set(2.8, 0.7, 0); tankGroup.add(rTrack); const turret = new THREE.Group(); turret.position.set(0, 2.1, 0.5); const tMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2, 1, 6), bodyMat); tMesh.castShadow = true; turret.add(tMesh); const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 6, 8), new THREE.MeshLambertMaterial({ color: 0x333333 })); cannon.rotation.x = Math.PI / 2; cannon.position.set(0, 0, 3.5); cannon.castShadow = true; turret.add(cannon); const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.8), new THREE.MeshLambertMaterial({ color: 0x111111 })); muzzle.position.set(0, 0, 6.5); turret.add(muzzle); tankGroup.add(turret); tankGroup.position.set(startX, 0, startZ); scene.add(tankGroup); const unit = { type: 'tank', mesh: tankGroup, turret: turret, bodyMat: bodyMat, originalColor: color, team: team, speed: 6, hp: 600, maxHp: 600, target: new THREE.Vector3(startX, 0, startZ), manualTarget: false, cooldown: 0, isDead: false, radius: 3, respawnTimer: 0, basePos: new THREE.Vector3(startX, 0, startZ) }; body.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 4, 4.5); tanks.push(unit); }
+function createTank(color, team, startX, startZ) { const tankGroup = new THREE.Group(); const bodyMat = new THREE.MeshLambertMaterial({ color: color }); const body = new THREE.Mesh(new THREE.BoxGeometry(4.8, 1.6, 7.5), bodyMat); body.position.y = 1; body.castShadow = true; tankGroup.add(body); const slope = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.8, 2), bodyMat); slope.rotation.x = Math.PI/6; slope.position.set(0, 1.4, 3.5); tankGroup.add(slope); const tMat = new THREE.MeshLambertMaterial({ color: 0x222222 }); const lTrack = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 8), tMat); lTrack.position.set(-2.8, 0.7, 0); tankGroup.add(lTrack); const rTrack = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 8), tMat); rTrack.position.set(2.8, 0.7, 0); tankGroup.add(rTrack); const turret = new THREE.Group(); turret.position.set(0, 2.1, 0.5); const tMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2, 1, 6), bodyMat); tMesh.castShadow = true; turret.add(tMesh); const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 6, 8), new THREE.MeshLambertMaterial({ color: 0x333333 })); cannon.rotation.x = Math.PI / 2; cannon.position.set(0, 0, 3.5); cannon.castShadow = true; turret.add(cannon); const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.8), new THREE.MeshLambertMaterial({ color: 0x111111 })); muzzle.position.set(0, 0, 6.5); turret.add(muzzle); tankGroup.add(turret); tankGroup.position.set(startX, 0, startZ); scene.add(tankGroup); const unit = { type: 'tank', mesh: tankGroup, turret: turret, bodyMat: bodyMat, originalColor: color, team: team, speed: 6, hp: 600, maxHp: 600, target: new THREE.Vector3(startX, 0, startZ), manualTarget: false, cooldown: 0, isDead: false, radius: 3, respawnTimer: 0, basePos: new THREE.Vector3(startX, 0, startZ) }; body.userData = unit; tankGroup.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 4, 4.5); tanks.push(unit); }
 
 function createAIHelicopter(color, team, x, z) {
   const hGroup = new THREE.Group();
@@ -445,7 +502,8 @@ function createAIHelicopter(color, team, x, z) {
   hGroup.add(body); hGroup.add(rotor);
   hGroup.position.set(x, 22, z);
   scene.add(hGroup);
-  const unit = { radius: 4, mesh: hGroup, rotor: rotor, team: team, hp: 180, maxHp: 180, basePos: new THREE.Vector3(x, 22, z), velocity: new THREE.Vector3(), targetPos: new THREE.Vector3((Math.random()-0.5)*150, 22, (Math.random()-0.5)*150), cooldown: 0, isDead: false, respawnTimer: 0, strafeTimer: 0 };
+  const unit = { type:'heli', radius: 4, mesh: hGroup, rotor: rotor, team: team, hp: 180, maxHp: 180, basePos: new THREE.Vector3(x, 22, z), velocity: new THREE.Vector3(), targetPos: new THREE.Vector3((Math.random()-0.5)*150, 22, (Math.random()-0.5)*150), cooldown: 0, isDead: false, respawnTimer: 0, strafeTimer: 0, speed: 15 };
+  hGroup.userData = unit;
   addHealthBar(unit, 2, 3); aiHelis.push(unit);
 }
 
@@ -499,6 +557,8 @@ function setupControls() {
   window.addEventListener('keydown', e => {
     let k = e.key.toLowerCase();
     if(keys.hasOwnProperty(k)) keys[k] = true;
+    if(k === ' ') keys.space = true;
+    if(k === 'shift') keys.shift = true;
     if(k === 'c') toggleDirectControl();
     if(directControlActive && directControlUnit && directControlUnit.type === 'soldier') {
       if(k >= '1' && k <= '5') { directControlUnit.weapon = parseInt(k) - 1; resetWeaponState(directControlUnit); updateWeaponBar(); }
@@ -508,6 +568,8 @@ function setupControls() {
   window.addEventListener('keyup', e => {
     let k = e.key.toLowerCase();
     if(keys.hasOwnProperty(k)) keys[k] = false;
+    if(k === ' ') keys.space = false;
+    if(k === 'shift') keys.shift = false;
   });
   window.addEventListener('wheel', e => {
     if(!directControlActive) { cameraZoom = Math.max(30, Math.min(120, cameraZoom + e.deltaY * 0.05)); updateCameraPosition(); }
@@ -596,7 +658,9 @@ function setupControls() {
 
 function fireDirect() {
   if(!directControlUnit) return;
-  if(directControlUnit.type === 'soldier') {
+  const cat = getUnitCategory(directControlUnit);
+
+  if(cat === 'soldier') {
     const u = directControlUnit;
     const w = WEAPONS[u.weapon === undefined ? 1 : u.weapon];
     if(u.reloadTimer > 0) return;
@@ -614,9 +678,92 @@ function fireDirect() {
     u.ammo--;
     if(w.heat) { u.heat = (u.heat || 0) + 6; if(u.heat >= 100) { u.heat = 100; u.overheated = true; } }
     if(u.ammo <= 0) startReload(u);
-  } else if (directControlUnit.turret) {
+  } else if(cat === 'plane') {
+    // ✈️ Disparar ametralladora + misiles desde el avión
+    const u = directControlUnit;
+    if(u.cooldown > 0) return;
+    const p = u.mesh.position;
+    const yaw = u.yaw !== undefined ? u.yaw : Math.atan2(Math.sin(fpYaw), Math.cos(fpYaw));
+    const muzzle = new THREE.Vector3(
+      p.x - Math.sin(yaw) * 8,
+      p.y,
+      p.z - Math.cos(yaw) * 8
+    );
+    const target = new THREE.Vector3(
+      p.x + Math.sin(yaw) * 200,
+      1,
+      p.z + Math.cos(yaw) * 200
+    );
+    fireProjectile(muzzle, target, 0xffff44, 30, 'ally');
+    playSound('shot');
+    u.cooldown = 0.12;
+    // Misil secundario con click derecho
+    if (window.__firingSecondary && (!u.missileCooldown || u.missileCooldown <= 0)) {
+      fireProjectile(muzzle, target, 0xff6600, 90, 'ally');
+      playSound('explosion');
+      u.missileCooldown = 3.5;
+    }
+  } else if(cat === 'heli' && directControlUnit.turret) {
+    // 🚁 El heli usa su torreta para disparar
+    const u = directControlUnit;
+    if(u.cooldown > 0) return;
+    const cannonTip = new THREE.Vector3(0, 0, 1.5);
+    u.turret.localToWorld(cannonTip);
+    fireProjectile(cannonTip, currentMouseWorld, 0xffff00, 40, 'ally');
+    playSound('shot');
+    u.cooldown = 0.15;
+  } else if(cat === 'heli' || cat === 'heli_transport') {
+    // 🚁 Heli sin torreta: dispara al frente
+    const u = directControlUnit;
+    if(u.cooldown > 0) return;
+    const p = u.mesh.position;
+    const muzzle = new THREE.Vector3(p.x, p.y - 0.5, p.z);
+    const target = new THREE.Vector3(
+      p.x + Math.sin(fpYaw) * 100,
+      0,
+      p.z - Math.cos(fpYaw) * 100
+    );
+    fireProjectile(muzzle, target, 0xffff00, 25, 'ally');
+    playSound('shot');
+    u.cooldown = 0.15;
+  } else if(cat === 'boat') {
+    // 🚢 El bote dispara cañones al frente
+    const u = directControlUnit;
+    if(u.cd > 0) return;
+    const p = u.mesh.position;
+    const yaw = u.mesh.rotation.y;
+    const muzzle = new THREE.Vector3(
+      p.x + Math.sin(yaw) * 8,
+      p.y + 2,
+      p.z + Math.cos(yaw) * 8
+    );
+    const target = new THREE.Vector3(
+      p.x + Math.sin(yaw + fpYaw) * 100,
+      1,
+      p.z + Math.cos(yaw + fpYaw) * 100
+    );
+    fireProjectile(muzzle, target, 0xff8800, 90, 'ally');
+    playSound('shot');
+    u.cd = 0.8;
+  } else if(cat === 'artillery') {
+    // 💣 Artillería (la maneja ia_mejorada.js, aquí solo fallback)
+    const u = directControlUnit;
+    if (!u._playerCd || u._playerCd <= 0) {
+      const p = u.mesh.position;
+      const muzzle = new THREE.Vector3(p.x, p.y + 5.5, p.z);
+      const target = new THREE.Vector3(
+        p.x + Math.sin(fpYaw) * 200,
+        1,
+        p.z - Math.cos(fpYaw) * 200
+      );
+      fireProjectile(muzzle, target, 0xff5522, 260, 'ally');
+      playSound('explosion');
+      u._playerCd = 1.5;
+    }
+  } else if(directControlUnit.turret) {
+    // 🚙 Cualquier otro vehículo con torreta (tank, apc)
     let damage = directControlUnit.type === 'tank' ? 150 : 50;
-    let cannonTip = new THREE.Vector3(0, 0.2, 4);
+    const cannonTip = new THREE.Vector3(0, 0.2, 4);
     directControlUnit.turret.localToWorld(cannonTip);
     fireProjectile(cannonTip, currentMouseWorld, 0xffaa00, damage, 'ally');
     playSound('shot');
@@ -626,17 +773,21 @@ function fireDirect() {
 
 function toggleDirectControl() {
   if (directControlActive) {
-    if(directControlUnit) directControlUnit.mesh.visible=true;
+    if(directControlUnit) directControlUnit.mesh.visible = true;
     directControlActive = false;
     directControlUnit = null;
-    cameraZoom=70;
+    cameraZoom = 70;
+    dcThrottle = 0;
     document.getElementById('btn-direct-control').innerText = "Control Directo (C)";
     document.getElementById('btn-direct-control').classList.replace('bg-green-600', 'bg-purple-600');
     updateWeaponBar();
   } else if (selectedUnits.length === 1) {
     directControlActive = true;
     directControlUnit = selectedUnits[0];
-    aimDirty=false;
+    aimDirty = false;
+    dcThrottle = 0;
+    dcLastPos.copy(directControlUnit.mesh.position);
+    dcVel.set(0,0,0);
     if(directControlUnit.type !== 'soldier') {
       directControlUnit.mesh.visible = true;
     } else {
@@ -644,9 +795,9 @@ function toggleDirectControl() {
       if(directControlUnit.weapon === undefined) directControlUnit.weapon = directControlUnit.role === 'rocket' ? 4 : 1;
       resetWeaponState(directControlUnit);
     }
-    fpYaw=Math.PI;
-    fpPitch=0;
-    { const p=directControlUnit.mesh.position; currentMouseWorld.set(p.x,0,p.z-30); }
+    fpYaw = Math.PI;
+    fpPitch = 0;
+    { const p = directControlUnit.mesh.position; currentMouseWorld.set(p.x, 0, p.z - 30); }
     document.getElementById('btn-direct-control').innerText = "Control RTS (C)";
     document.getElementById('btn-direct-control').classList.replace('bg-purple-600', 'bg-green-600');
     cameraZoom = 34;
@@ -668,21 +819,28 @@ function handleMapClick(e) {
     setTimeout(() => { airstrikeReady = true; btn.innerText = "Ataque Aéreo"; btn.className = "bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-2 px-4 rounded border border-red-400 shadow-md transition-colors pointer-events-auto"; }, 20000);
     return;
   }
+
+  // ✅ AHORA SELECCIONA CUALQUIER UNIDAD ALIADA (incluye aviones, helis del mod, botes, artillería)
   const allyObjects = [];
-  soldiers.concat(vehicles, tanks, transports).filter(u => u.team === 'ally' && u.hp > 0).forEach(u => { u.mesh.traverse(child => { if(child.isMesh) allyObjects.push(child); }); });
+  const allAllies = getAllAllies();
+  allAllies.filter(u => u.team === 'ally' && u.hp > 0 && !u.isDead && !u.inHeli && !u.crashing).forEach(u => {
+    if (u.mesh) u.mesh.traverse(child => { if(child.isMesh) allyObjects.push(child); });
+  });
   const allyHit = raycaster.intersectObjects(allyObjects);
   if (e.button !== 2 && allyHit.length > 0) {
-    let root = allyHit[0].object;
-    while (root.parent && root.parent.type !== "Scene" && !root.userData.type && !root.userData.mesh) root = root.parent;
-    let unit = (root.userData && root.userData.mesh) ? root.userData : (root.userData.type ? root.userData : root.children[0]?.userData);
-    if (unit && unit.team === 'ally') { if (!e.shiftKey) clearSelection(); selectUnit(unit); }
+    const unit = getUnitFromMesh(allyHit[0].object);
+    if (unit && unit.team === 'ally') {
+      if (!e.shiftKey) clearSelection();
+      selectUnit(unit);
+    }
   } else if (groundHit) {
     if (selectedUnits.length > 0) {
       const dest = groundHit.point;
       createMoveMarker(dest.x, dest.z);
       selectedUnits.forEach((unit, idx) => {
         const offsetX = (idx % 4 - 1.5) * 3, offsetZ = (Math.floor(idx / 4) - 1.5) * 3;
-        unit.target.set(dest.x + offsetX, unit.mesh.position.y, dest.z + offsetZ);
+        // Los aviones/helis no usan target, pero por si acaso
+        if (unit.target) unit.target.set(dest.x + offsetX, unit.mesh.position.y, dest.z + offsetZ);
         unit.manualTarget = true;
       });
     } else clearSelection();
@@ -705,7 +863,13 @@ function updateUI() {
   if(selectedUnits.length === 1) {
     btnDC.classList.remove('hidden');
     const u = selectedUnits[0];
-    if(u.type === 'transport') btnDC.innerText = "🚁 Pilotar (C)";
+    const cat = getUnitCategory(u);
+    if(cat === 'plane') btnDC.innerText = "✈️ Pilotar (C)";
+    else if(cat === 'heli' || cat === 'heli_transport') btnDC.innerText = "🚁 Pilotar (C)";
+    else if(cat === 'boat') btnDC.innerText = "🚢 Pilotar (C)";
+    else if(cat === 'artillery') btnDC.innerText = "💣 Controlar (C)";
+    else if(cat === 'tank' || cat === 'apc') btnDC.innerText = "🚙 Conducir (C)";
+    else if(cat === 'transport') btnDC.innerText = "🚁 Pilotar (C)";
     else btnDC.innerText = "Control Directo (C)";
   } else {
     btnDC.classList.add('hidden');
@@ -716,9 +880,111 @@ function updateUI() {
 function updateCameraPosition() { camera.position.x = cameraTarget.x + Math.sin(cameraAngle) * (cameraZoom * 0.8); camera.position.z = cameraTarget.z + Math.cos(cameraAngle) * (cameraZoom * 0.8); camera.position.y = cameraTarget.y + cameraZoom*cameraPitch; camera.lookAt(cameraTarget); }
 function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
 
+/* ============ CONTROL DIRECTO DE VEHÍCULOS ESPECIALES ============ */
+function updateDirectControlVehicle(dt) {
+  if (!directControlActive || !directControlUnit) return;
+  const u = directControlUnit;
+  const cat = getUnitCategory(u);
+
+  // Solo procesar aviones, helis, botes y transportes aéreos
+  if (cat !== 'plane' && cat !== 'heli' && cat !== 'heli_transport' && cat !== 'boat') return;
+
+  const p = u.mesh.position;
+  const speed = u.speed || 20;
+  const throttleInput = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
+  const turnInput = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
+
+  // Suavizar throttle
+  dcThrottle += (throttleInput - dcThrottle) * Math.min(1, dt * 2);
+  const effectiveSpeed = speed * (0.3 + dcThrottle * 0.7);
+
+  if (cat === 'plane') {
+    // ✈️ Física simple de avión
+    // Yaw controlado por A/D
+    if (!u.yaw) u.yaw = u.mesh.rotation.y;
+    u.yaw += turnInput * 1.5 * dt;
+    // Altura: W sube, S baja (solo si throttle alto)
+    if (throttleInput !== 0) {
+      p.y += throttleInput * 8 * dt;
+      p.y = Math.max(2, Math.min(80, p.y));
+    }
+    // Avanzar hacia adelante
+    if (Math.abs(dcThrottle) > 0.05) {
+      p.x += Math.sin(u.yaw) * effectiveSpeed * dt;
+      p.z += Math.cos(u.yaw) * effectiveSpeed * dt;
+    }
+    u.mesh.rotation.y = u.yaw;
+    // Banking visual
+    u.mesh.rotation.z = -turnInput * 0.4;
+    // Pitch visual
+    u.mesh.rotation.x = -throttleInput * 0.2;
+    // Flamas
+    if (u.flames) for (const f of u.flames) f.visible = Math.abs(dcThrottle) > 0.05;
+  } else if (cat === 'heli' || cat === 'heli_transport') {
+    // 🚁 Movimiento libre tipo helicóptero
+    const fwdX = Math.sin(fpYaw), fwdZ = Math.cos(fpYaw);
+    const rightX = Math.cos(fpYaw), rightZ = -Math.sin(fpYaw);
+    let mx = 0, mz = 0, my = 0;
+    if (keys.w) { mx += fwdX; mz += fwdZ; my += 0.3; }
+    if (keys.s) { mx -= fwdX * 0.7; mz -= fwdZ * 0.7; my -= 0.3; }
+    if (keys.a) { mx -= rightX; mz -= rightZ; }
+    if (keys.d) { mx += rightX; mz += rightZ; }
+    // Aplicar joystick también
+    mx += joy.x * fwdX + joy.y * rightX * 0.5;
+    mz += joy.y * fwdZ + joy.x * rightZ * 0.5;
+
+    const len = Math.hypot(mx, mz);
+    if (len > 0.05) {
+      const sp = speed * Math.min(1, len);
+      p.x += (mx / len) * sp * dt;
+      p.z += (mz / len) * sp * dt;
+    }
+    // Altura
+    p.y += my * 15 * dt;
+    p.y = Math.max(3, Math.min(80, p.y));
+
+    // Orientar el heli hacia donde mira la cámara
+    u.mesh.rotation.y = fpYaw + Math.PI;
+    // Inclinación visual al moverse
+    u.mesh.rotation.z = -rightX * 0.1;
+    u.mesh.rotation.x = -0.05 + (keys.w ? -0.1 : 0);
+
+    // Rotor girando
+    if (u.rotorMain) u.rotorMain.rotation.y += 40 * dt;
+    if (u.rotorTail) u.rotorTail.rotation.x += 45 * dt;
+    if (u.rotor && !u.rotorMain) u.rotor.rotation.y += 45 * dt;
+  } else if (cat === 'boat') {
+    // 🚢 Movimiento de barco (solo plano XZ)
+    if (!u.heading) u.heading = u.mesh.rotation.y;
+    u.heading += turnInput * 1.2 * dt;
+    if (Math.abs(dcThrottle) > 0.05) {
+      p.x += Math.sin(u.heading) * effectiveSpeed * dt;
+      p.z += Math.cos(u.heading) * effectiveSpeed * dt;
+      // Limitar al agua
+      p.x = Math.max(SHORE + 3, Math.min(300, p.x));
+      p.z = Math.max(-190, Math.min(190, p.z));
+    }
+    u.mesh.rotation.y = u.heading;
+  }
+
+  // Actualizar HP bars y demás
+  if (u.hpGroup) {
+    u.hpGroup.position.copy(p);
+    u.hpGroup.position.y += (u.hpYOffset || 3);
+    u.hpGroup.quaternion.copy(camera.quaternion);
+    u.hpBar.scale.x = Math.max(0, u.hp / u.maxHp);
+    u.hpBar.position.x = -(u.hpWidth - u.hpWidth * u.hpBar.scale.x) / 2;
+    u.hpGroup.visible = true;
+  }
+}
+
 /* ============ IA BASE ============ */
 function updateAI(delta) {
-  combat=soldiers.concat(vehicles,tanks,transports.filter(h=>h.mesh.position.y<4),boats.filter(b=>!b.isDead));
+  combat = soldiers.concat(vehicles,tanks,transports.filter(h=>h.mesh.position.y<4),boats.filter(b=>!b.isDead));
+  if (window.MejoraMundo) {
+    if (window.MejoraMundo.planes) combat = combat.concat(window.MejoraMundo.planes);
+    if (window.MejoraMundo.helis) combat = combat.concat(window.MejoraMundo.helis);
+  }
   updateTransports(delta);
   updateBoats(delta);
   let allyCount = 0;
@@ -740,6 +1006,8 @@ function updateAI(delta) {
     }
   });
   aiHelis.forEach(heli => {
+    // ⚠️ NO aplicar IA al heli si el jugador lo controla
+    if (directControlActive && directControlUnit === heli) return;
     heli.rotor.rotation.y += 45 * delta;
     if(heli.isDead) {
       heli.respawnTimer += delta; heli.mesh.visible = false;
@@ -757,6 +1025,12 @@ function updateAI(delta) {
     if(minDist < 85 && heli.cooldown <= 0) { let aimPoint = closestTarget ? closestTarget.clone() : heli.mesh.position.clone().add(new THREE.Vector3(0,0,-50)); fireProjectile(heli.mesh.position.clone(), aimPoint, heli.team === 'ally' ? 0x00ffff : 0xff3300, 40, heli.team); playSound('shot'); heli.cooldown = 1.0; }
   });
   [tanks, vehicles, soldiers].forEach(group => group.forEach(u => {
+    // ⚠️ NO aplicar IA a la unidad que el jugador controla
+    if (directControlActive && directControlUnit === u) {
+      // Actualizar cooldown aunque esté siendo controlada
+      u.cooldown = Math.max(0, (u.cooldown || 0) - delta);
+      return;
+    }
     if(u.isDead || u.hp <= 0) {
       u.respawnTimer += delta;
       if(u.marine){ if(u.respawnTimer>6) u.mesh.visible=false; return; }
@@ -842,9 +1116,19 @@ function updateProjectiles(delta) {
     if(bulletBlocked(p.mesh.position)) hit = true;
     if(!hit) {
       aiHelis.concat(transports, boats, tanks, vehicles).forEach(target => {
-        if(!hit && target.team !== p.team && target.hp > 0 && p.mesh.position.distanceTo(target.mesh.position) < target.radius + 1.5) {
+        if(!hit && target.team !== p.team && target.hp > 0 && p.mesh.position.distanceTo(target.mesh.position) < (target.radius||2) + 1.5) {
           target.hp -= p.damage;
           if(target.hp <= 0) { target.isDead = true; if(target.bodyMat) target.bodyMat.color.setHex(0x1a1a1a); playSound('explosion'); }
+          hit = true;
+        }
+      });
+    }
+    if (!hit && window.MejoraMundo) {
+      const modTargets = (window.MejoraMundo.planes || []).concat(window.MejoraMundo.helis || []);
+      modTargets.forEach(target => {
+        if(!hit && target.team !== p.team && target.hp > 0 && !target.crashing && p.mesh.position.distanceTo(target.mesh.position) < 5) {
+          target.hp -= p.damage;
+          if(target.hp <= 0 && window.ModelosHD) window.ModelosHD.startCrash(target, target.type);
           hit = true;
         }
       });
@@ -864,40 +1148,43 @@ function updateProjectiles(delta) {
 
 /* ============ CÁMARA PRIMERA PERSONA ============ */
 function fpCamera() {
-  const on=directControlActive&&directControlUnit, want=on?70:45;
-  if(camera.fov!==want){camera.fov=want;camera.updateProjectionMatrix();}
-  document.body.classList.toggle('fp',!!on);
+  const on = directControlActive && directControlUnit;
+  const want = on ? 70 : 45;
+  if(camera.fov !== want){ camera.fov = want; camera.updateProjectionMatrix(); }
+  document.body.classList.toggle('fp', !!on);
   if(!camera.parent) scene.add(camera);
   if(!fpGuns){
-    fpGuns={};
-    const mk=ps=>{
-      const g=new THREE.Group();
-      ps.forEach(p=>{
-        const m=new THREE.Mesh(new THREE.BoxGeometry(p[0],p[1],p[2]),new THREE.MeshBasicMaterial({color:p[6],depthTest:false}));
-        m.position.set(p[3],p[4],p[5]); m.renderOrder=1000; g.add(m);
+    fpGuns = {};
+    const mk = ps => {
+      const g = new THREE.Group();
+      ps.forEach(p => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(p[0],p[1],p[2]), new THREE.MeshBasicMaterial({color:p[6],depthTest:false}));
+        m.position.set(p[3],p[4],p[5]); m.renderOrder = 1000; g.add(m);
       });
-      g.visible=false; camera.add(g); return g;
+      g.visible = false; camera.add(g); return g;
     };
-    fpGuns.pistol=mk([[0.08,0.10,0.50, 0.30,-0.30,-0.40, 0x232323],[0.06,0.06,0.14, 0.30,-0.30,-0.72, 0x0a0a0a],[0.08,0.26,0.14, 0.32,-0.46,-0.28, 0x2c2c2c],[0.05,0.04,0.10, 0.32,-0.38,-0.34, 0x101010],[0.14,0.16,0.14, 0.30,-0.44,-0.20, 0xd0aa86]]);
-    fpGuns.rifle=mk([[0.10,0.16,0.85, 0.30,-0.28,-0.65, 0x222222],[0.06,0.06,0.35, 0.30,-0.26,-1.18, 0x0a0a0a],[0.12,0.14,0.35, 0.30,-0.28,-0.95, 0x2a2a2a],[0.08,0.24,0.14, 0.30,-0.48,-0.55, 0x2c2c2c],[0.10,0.14,0.22, 0.30,-0.28,-0.10, 0x1a1a1a],[0.05,0.06,0.05, 0.30,-0.20,-0.40, 0x0a0a0a],[0.04,0.10,0.04, 0.30,-0.19,-1.05, 0x0a0a0a],[0.14,0.16,0.14, 0.30,-0.44,-0.50, 0xd0aa86],[0.14,0.16,0.14, 0.30,-0.42,-1.00, 0xd0aa86]]);
-    fpGuns.machinegun=mk([[0.16,0.22,1.05, 0.32,-0.28,-0.75, 0x161616],[0.09,0.09,0.55, 0.32,-0.24,-1.55, 0x0a0a0a],[0.14,0.14,0.40, 0.32,-0.24,-1.25, 0x2a2a2a],[0.26,0.26,0.14, 0.36,-0.50,-0.65, 0x333333],[0.14,0.20,0.28, 0.32,-0.28,-0.15, 0x1a1a1a],[0.16,0.18,0.16, 0.32,-0.44,-0.55, 0xd0aa86],[0.16,0.18,0.16, 0.32,-0.42,-1.10, 0xd0aa86]]);
-    fpGuns.sniper=mk([[0.08,0.14,1.15, 0.30,-0.28,-0.85, 0x1a1a2a],[0.05,0.05,0.75, 0.30,-0.26,-1.65, 0x0a0a0a],[0.10,0.10,0.48, 0.30,-0.10,-0.88, 0x080808],[0.12,0.12,0.04, 0.30,-0.10,-1.15, 0x334466],[0.12,0.12,0.04, 0.30,-0.10,-0.62, 0x334466],[0.10,0.16,0.35, 0.30,-0.28,-0.10, 0x151515],[0.30,0.03,0.03, 0.30,-0.44,-1.45, 0x0a0a0a],[0.14,0.16,0.14, 0.30,-0.44,-0.60, 0xd0aa86]]);
-    fpGuns.bazooka=mk([[0.26,0.26,1.55, 0.34,-0.20,-1.00, 0x3a5a3a],[0.38,0.38,0.28, 0.34,-0.20,-1.92, 0x2a3a2a],[0.32,0.32,0.15, 0.34,-0.20,-0.15, 0x1a1a1a],[0.08,0.24,0.12, 0.40,-0.44,-0.50, 0x101010],[0.06,0.14,0.06, 0.24,-0.28,-0.90, 0x101010],[0.06,0.14,0.06, 0.24,-0.28,-1.50, 0x101010],[0.14,0.16,0.14, 0.34,-0.42,-0.55, 0xd0aa86]]);
+    fpGuns.pistol = mk([[0.08,0.10,0.50, 0.30,-0.30,-0.40, 0x232323],[0.06,0.06,0.14, 0.30,-0.30,-0.72, 0x0a0a0a],[0.08,0.26,0.14, 0.32,-0.46,-0.28, 0x2c2c2c],[0.05,0.04,0.10, 0.32,-0.38,-0.34, 0x101010],[0.14,0.16,0.14, 0.30,-0.44,-0.20, 0xd0aa86]]);
+    fpGuns.rifle = mk([[0.10,0.16,0.85, 0.30,-0.28,-0.65, 0x222222],[0.06,0.06,0.35, 0.30,-0.26,-1.18, 0x0a0a0a],[0.12,0.14,0.35, 0.30,-0.28,-0.95, 0x2a2a2a],[0.08,0.24,0.14, 0.30,-0.48,-0.55, 0x2c2c2c],[0.10,0.14,0.22, 0.30,-0.28,-0.10, 0x1a1a1a],[0.05,0.06,0.05, 0.30,-0.20,-0.40, 0x0a0a0a],[0.04,0.10,0.04, 0.30,-0.19,-1.05, 0x0a0a0a],[0.14,0.16,0.14, 0.30,-0.44,-0.50, 0xd0aa86],[0.14,0.16,0.14, 0.30,-0.42,-1.00, 0xd0aa86]]);
+    fpGuns.machinegun = mk([[0.16,0.22,1.05, 0.32,-0.28,-0.75, 0x161616],[0.09,0.09,0.55, 0.32,-0.24,-1.55, 0x0a0a0a],[0.14,0.14,0.40, 0.32,-0.24,-1.25, 0x2a2a2a],[0.26,0.26,0.14, 0.36,-0.50,-0.65, 0x333333],[0.14,0.20,0.28, 0.32,-0.28,-0.15, 0x1a1a1a],[0.16,0.18,0.16, 0.32,-0.44,-0.55, 0xd0aa86],[0.16,0.18,0.16, 0.32,-0.42,-1.10, 0xd0aa86]]);
+    fpGuns.sniper = mk([[0.08,0.14,1.15, 0.30,-0.28,-0.85, 0x1a1a2a],[0.05,0.05,0.75, 0.30,-0.26,-1.65, 0x0a0a0a],[0.10,0.10,0.48, 0.30,-0.10,-0.88, 0x080808],[0.12,0.12,0.04, 0.30,-0.10,-1.15, 0x334466],[0.12,0.12,0.04, 0.30,-0.10,-0.62, 0x334466],[0.10,0.16,0.35, 0.30,-0.28,-0.10, 0x151515],[0.30,0.03,0.03, 0.30,-0.44,-1.45, 0x0a0a0a],[0.14,0.16,0.14, 0.30,-0.44,-0.60, 0xd0aa86]]);
+    fpGuns.bazooka = mk([[0.26,0.26,1.55, 0.34,-0.20,-1.00, 0x3a5a3a],[0.38,0.38,0.28, 0.34,-0.20,-1.92, 0x2a3a2a],[0.32,0.32,0.15, 0.34,-0.20,-0.15, 0x1a1a1a],[0.08,0.24,0.12, 0.40,-0.44,-0.50, 0x101010],[0.06,0.14,0.06, 0.24,-0.28,-0.90, 0x101010],[0.06,0.14,0.06, 0.24,-0.28,-1.50, 0x101010],[0.14,0.16,0.14, 0.34,-0.42,-0.55, 0xd0aa86]]);
   }
-  Object.values(fpGuns).forEach(g => { g.visible=false; g.rotation.set(0,0,0); g.position.set(0,0,0); });
+  Object.values(fpGuns).forEach(g => { g.visible = false; g.rotation.set(0,0,0); g.position.set(0,0,0); });
   if(!on) return;
-  const u=directControlUnit;
-  if(u.hp<=0){ toggleDirectControl(); return; }
-  fpYaw+=((keys.e?1:0)-(keys.q?1:0))*0.04;
-  if(u.hpGroup) u.hpGroup.visible=false;
-  const p=u.mesh.position, cp=Math.cos(fpPitch);
-  const f=new THREE.Vector3(Math.sin(fpYaw)*cp,Math.sin(fpPitch),-Math.cos(fpYaw)*cp);
-  if(u.type==='soldier'){
-    u.mesh.visible=false;
+  const u = directControlUnit;
+  if(u.hp <= 0){ toggleDirectControl(); return; }
+  fpYaw += ((keys.e?1:0) - (keys.q?1:0)) * 0.04;
+  if(u.hpGroup) u.hpGroup.visible = false;
+  const p = u.mesh.position, cp = Math.cos(fpPitch);
+  const f = new THREE.Vector3(Math.sin(fpYaw)*cp, Math.sin(fpPitch), -Math.cos(fpYaw)*cp);
+  const cat = getUnitCategory(u);
+
+  if(cat === 'soldier'){
+    u.mesh.visible = false;
     const wIdx = u.weapon === undefined ? 1 : u.weapon;
     const w = WEAPONS[wIdx];
     const g = fpGuns[w.key];
-    g.visible=true;
+    g.visible = true;
     if(u.reloadTimer > 0) {
       const t = 1 - u.reloadTimer / w.reload;
       const dip = Math.sin(Math.min(1, t) * Math.PI);
@@ -905,20 +1192,64 @@ function fpCamera() {
       g.position.y = -dip * 0.45;
       g.position.z = dip * 0.18;
     }
-    camera.position.set(p.x,1.7,p.z);
-    camera.lookAt(camera.position.x+f.x,camera.position.y+f.y,camera.position.z+f.z);
-  } else if(u.type === 'transport') {
+    camera.position.set(p.x, 1.7, p.z);
+    camera.lookAt(camera.position.x+f.x, camera.position.y+f.y, camera.position.z+f.z);
+  } else if(cat === 'plane') {
+    // ✈️ Cámara de cabina
     u.mesh.visible = true;
-    const camDist = 24;
-    camera.position.set(p.x - Math.sin(fpYaw) * camDist, p.y + 7, p.z + Math.cos(fpYaw) * camDist);
+    const yaw = u.yaw !== undefined ? u.yaw : fpYaw;
+    camera.position.set(
+      p.x - Math.sin(yaw) * 2.5,
+      p.y + 1.5,
+      p.z - Math.cos(yaw) * 2.5
+    );
+    camera.lookAt(
+      p.x + Math.sin(yaw) * 60,
+      p.y + fpPitch * 25,
+      p.z + Math.cos(yaw) * 60
+    );
+  } else if(cat === 'heli' || cat === 'heli_transport') {
+    // 🚁 Cámara de heli (exterior, detrás)
+    u.mesh.visible = true;
+    const dist = 14;
+    camera.position.set(
+      p.x - Math.sin(fpYaw) * dist,
+      p.y + 5,
+      p.z + Math.cos(fpYaw) * dist
+    );
+    camera.lookAt(p.x, p.y, p.z);
+  } else if(cat === 'boat') {
+    // 🚢 Cámara de bote
+    u.mesh.visible = true;
+    const dist = 20;
+    camera.position.set(
+      p.x - Math.sin(fpYaw) * dist,
+      p.y + 10,
+      p.z + Math.cos(fpYaw) * dist
+    );
     camera.lookAt(p.x, p.y + 1, p.z);
+  } else if(cat === 'artillery') {
+    // 💣 Artillería: cámara elevada para ver el arco
+    u.mesh.visible = true;
+    const dist = 20;
+    camera.position.set(
+      p.x - Math.sin(fpYaw) * dist,
+      p.y + 10,
+      p.z + Math.cos(fpYaw) * dist
+    );
+    camera.lookAt(
+      p.x + Math.sin(fpYaw) * 60,
+      1,
+      p.z - Math.cos(fpYaw) * 60
+    );
   } else {
-    u.mesh.visible=true;
-    camera.position.set(p.x-Math.sin(fpYaw)*9, 6, p.z+Math.cos(fpYaw)*9);
-    camera.lookAt(camera.position.x+f.x,camera.position.y+f.y,camera.position.z+f.z);
+    // 🚙 Vehículos terrestres (tank, apc, transport)
+    u.mesh.visible = true;
+    camera.position.set(p.x - Math.sin(fpYaw) * 9, 6, p.z + Math.cos(fpYaw) * 9);
+    camera.lookAt(camera.position.x + f.x, camera.position.y + f.y, camera.position.z + f.z);
   }
-  currentMouseWorld.copy(camera.position).addScaledVector(f,150);
-  cameraAngle=-fpYaw;
+  currentMouseWorld.copy(camera.position).addScaledVector(f, 150);
+  cameraAngle = -fpYaw;
 }
 
 /* ============ TRANSPORTES ============ */
@@ -928,7 +1259,8 @@ function createTransport(team,px,pz,color){
   add(3,2.6,7,mat,0,0,0); add(0.8,0.8,5,mat,0,0.6,-5.5); add(0.2,2,1.2,dk,0,1.4,-8); add(0.2,0.2,6,dk,-1.4,-1.6,0); add(0.2,0.2,6,dk,1.4,-1.6,0);
   const rotor=add(14,0.1,0.5,dk,0,1.9,0);
   g.position.set(px,1.5,pz); scene.add(g);
-  const h={mesh:g,rotor:rotor,team:team,hp:700,maxHp:700,radius:4,pad:new THREE.Vector3(px,0,pz),state:'board',timer:0,pickT:0,unT:0,boarders:[],cargo:[],dest:new THREE.Vector3(),isDead:false,respawnTimer:0};
+  const h={type:'transport',mesh:g,rotor:rotor,team:team,hp:700,maxHp:700,radius:4,speed:20,pad:new THREE.Vector3(px,0,pz),state:'board',timer:0,pickT:0,unT:0,boarders:[],cargo:[],dest:new THREE.Vector3(),isDead:false,respawnTimer:0};
+  g.userData = h;
   addHealthBar(h,4.5,4); transports.push(h);
 }
 
@@ -936,6 +1268,9 @@ function pickDrop(team){ const sg=team==='ally'?-1:1; for(let i=0;i<15;i++){ con
 
 function updateTransports(dt){
   transports.forEach(h=>{
+    // ⚠️ NO aplicar IA si el jugador lo controla
+    if (directControlActive && directControlUnit === h) return;
+
     const P=h.mesh.position;
     if(h.isDead||h.hp<=0){ h.isDead=true;
       h.cargo.forEach(s=>{s.inHeli=null;s.hp=0;s.mesh.visible=true;s.mesh.position.y=-0.5;s.respawnTimer=0;}); h.cargo=[]; h.boarders=[];
@@ -1044,11 +1379,20 @@ function animate() {
     if(window.__firing && w.auto && u.cooldown <= 0 && u.reloadTimer <= 0 && !u.overheated && (u.ammo === undefined || u.ammo > 0)) fireDirect();
     updateWeaponBar();
   }
-  cameraPitch+=((directControlActive?0.55:1)-cameraPitch)*0.1;
-  document.getElementById('touch').style.display=directControlActive?'block':'none';
+  // Cooldown de aviones/helis disparando en control directo
+  if (directControlActive && directControlUnit) {
+    const u = directControlUnit;
+    if (u.cooldown > 0) u.cooldown -= delta;
+    if (u.missileCooldown > 0) u.missileCooldown -= delta;
+    if (u.cd > 0) u.cd -= delta;
+    if (u._playerCd > 0) u._playerCd -= delta;
+  }
+  cameraPitch += ((directControlActive?0.55:1)-cameraPitch)*0.1;
+  document.getElementById('touch').style.display = directControlActive ? 'block' : 'none';
   updateJets(delta);
   updateCameraPosition();
   updateAI(delta);
+  updateDirectControlVehicle(delta);
   fpCamera();
 
   /* ====== HOOK DE MODS ====== */
