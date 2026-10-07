@@ -1,11 +1,11 @@
 /* ============================================================
-   MOD: Aire y Conquista v3.0
-   - Ciclo de vuelo REHECHO: taxi → despegue → ascenso → combate
-     → regreso → aproximación → aterrizaje → rodaje → aparcado
-   - Rumbos corregidos (antes el avión miraba al revés)
-   - Failsafe: si un avión se queda trabado en el suelo, se resetea
-   - Helipuerto funcional (helicópteros aterrizan a repararse)
-   - Todo lo demás igual: nubes, aeropuertos, cuarteles, victoria/derrota
+   MOD: Aire y Conquista v4.0
+   - MAPA EXTENDIDO (900×900 visual, fog extendido)
+   - Aeropuertos movidos FUERA de la zona de casas base (z<-90 / z>90)
+   - Cuarteles al extremo del mapa
+   - Failsafe doble: timeout en suelo + fuera de límites
+   - Más decoración en el anillo exterior (árboles, colinas, rocas)
+   - Rumbos y ciclo de vuelo corregidos (v3.0)
    ============================================================ */
 (function () {
   if (window.__AIRCONQUEST_LOADED) { console.warn('⚠️ Mod ya cargado'); return; }
@@ -17,21 +17,25 @@
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
 
-  console.log('✈️ Mod Aire y Conquista v3.0: iniciando...');
-  API.say('✈️ Aire y Conquista v3.0');
+  console.log('✈️ Mod Aire y Conquista v4.0: iniciando...');
+  API.say('✈️ Aire y Conquista v4.0');
 
-  // ===================== CONSTANTES =====================
-  const GROUND_Y   = 1.0;    // altura mínima (avión en suelo)
-  const CRUISE_ALT = 30;     // altitud de crucero
+  // ===================== CONSTANTES GLOBALES =====================
+  const GROUND_Y   = 1.0;
+  const CRUISE_ALT = 32;
   const TAXI_SPEED = 14;
-  const ROLL_SPEED = 65;     // velocidad de despegue/aterrizaje
+  const ROLL_SPEED = 65;
   const CRUISE_SPEED = 52;
-  const APPROACH_DIST = 160; // distancia horizontal del planeo final
+  const APPROACH_DIST = 170;
+  const WORLD_SIZE = 900;   // nuevo tamaño de mapa
 
-  const mod = {
-    planes: [], helis: [], hqs: [], smokes: [], clouds: [],
-    gameOver: false,
-  };
+  // NUEVAS POSICIONES (fuera de la zona de casas base)
+  const ALLY_AIRPORT  = V(-60, 0, -200);
+  const ENEMY_AIRPORT = V( 60, 0,  200);
+  const ALLY_HQ_POS   = V(  0, 0, -280);
+  const ENEMY_HQ_POS  = V(  0, 0,  280);
+
+  const mod = { planes: [], helis: [], hqs: [], smokes: [], clouds: [], gameOver: false };
 
   // ===================== HUD CUARTELES =====================
   const hudHq = document.createElement('div');
@@ -92,8 +96,6 @@
     unit.hpGroup = g; unit.hpBar = fg;
     unit.hpYOffset = yOffset; unit.hpWidth = width;
   }
-
-  // Mueve `pos` hacia `target` como máximo `maxStep`. Devuelve { arrived, distance }.
   function stepToward(pos, target, maxStep) {
     const dx = target.x - pos.x, dy = target.y - pos.y, dz = target.z - pos.z;
     const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
@@ -103,24 +105,57 @@
     pos.x += dx * k; pos.y += dy * k; pos.z += dz * k;
     return { arrived: false, distance: d - maxStep };
   }
-
-  // Gira yaw suavemente hacia un objetivo
   function rotateSmooth(cur, target, dt, speed) {
     let diff = target - cur;
     while (diff >  Math.PI) diff -= 2 * Math.PI;
     while (diff < -Math.PI) diff += 2 * Math.PI;
     return cur + diff * Math.min(1, dt * speed);
   }
+  const yawFromDir = (dx, dz) => Math.atan2(dx, dz);
 
-  function yawFromDir(dx, dz) { return Math.atan2(dx, dz); }
+  // ===================== EXTENDER MAPA =====================
+  function extendWorld() {
+    // Suelo extendido (queda debajo del base a y=0)
+    const bigGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE),
+      new THREE.MeshLambertMaterial({ color: 0x4b6e36 })
+    );
+    bigGround.rotation.x = -Math.PI / 2;
+    bigGround.position.y = -0.05;
+    bigGround.receiveShadow = false;
+    bigGround.renderOrder = -1;
+    API.scene.add(bigGround);
+
+    // Extender niebla para que el mapa nuevo sea visible
+    if (API.scene.fog) {
+      API.scene.fog.near = 150;
+      API.scene.fog.far  = WORLD_SIZE;
+    }
+
+    // Aumentar sombra de la luz para cubrir más terreno
+    if (API.scene.children) {
+      for (const c of API.scene.children) {
+        if (c.isDirectionalLight && c.shadow) {
+          const d = WORLD_SIZE * 0.4;
+          c.shadow.camera.left = -d;
+          c.shadow.camera.right = d;
+          c.shadow.camera.top = d;
+          c.shadow.camera.bottom = -d;
+          c.shadow.camera.updateProjectionMatrix();
+        }
+      }
+    }
+    console.log(`🗺️ Mundo extendido a ${WORLD_SIZE}×${WORLD_SIZE}`);
+  }
 
   // ===================== NUBES =====================
   function addClouds() {
     const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
     const geo = new THREE.SphereGeometry(1, 7, 6);
-    for (let i = 0; i < 42; i++) {
+    const R = WORLD_SIZE * 0.45;
+    for (let i = 0; i < 60; i++) {
       const c = new THREE.Group();
-      c.position.set(rnd(-320, 320), rnd(55, 95), rnd(-320, 320));
+      c.position.set(rnd(-R, R), rnd(55, 110), rnd(-R, R));
       const n = 3 + Math.floor(Math.random() * 3);
       for (let p = 0; p < n; p++) {
         const s = rnd(3, 7);
@@ -134,15 +169,16 @@
     }
   }
 
-  // ===================== MONTAÑAS =====================
+  // ===================== MONTAÑAS LEJANAS =====================
   function addDistantMountains() {
     const matRock = new THREE.MeshLambertMaterial({ color: 0x6a7a6a });
     const matSnow = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const g = new THREE.Group();
-    for (let i = 0; i < 26; i++) {
-      const a = (i / 26) * Math.PI * 2, rad = 280 + rnd(-20, 20);
+    const rBase = WORLD_SIZE * 0.42;
+    for (let i = 0; i < 36; i++) {
+      const a = (i / 36) * Math.PI * 2, rad = rBase + rnd(-30, 30);
       const x = Math.cos(a) * rad, z = Math.sin(a) * rad;
-      const h = rnd(30, 65), r = rnd(20, 36);
+      const h = rnd(35, 75), r = rnd(22, 40);
       const peak = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), matRock);
       peak.position.set(x, h / 2 - 3, z); peak.rotation.y = rnd(0, Math.PI); g.add(peak);
       const snow = new THREE.Mesh(new THREE.ConeGeometry(r * 0.42, h * 0.32, 5), matSnow);
@@ -154,11 +190,12 @@
   // ===================== RÍO + PUENTES =====================
   function addRiver() {
     const g = new THREE.Group();
-    const river = new THREE.Mesh(new THREE.PlaneGeometry(400, 26),
+    const L = WORLD_SIZE - 100;
+    const river = new THREE.Mesh(new THREE.PlaneGeometry(L, 26),
       new THREE.MeshLambertMaterial({ color: 0x2a6fa8, transparent: true, opacity: 0.85 }));
     river.rotation.x = -Math.PI / 2; river.position.set(0, 0.07, 0); g.add(river);
     for (const zo of [-14, 14]) {
-      const bank = new THREE.Mesh(new THREE.PlaneGeometry(400, 3),
+      const bank = new THREE.Mesh(new THREE.PlaneGeometry(L, 3),
         new THREE.MeshLambertMaterial({ color: 0xd9c68f }));
       bank.rotation.x = -Math.PI / 2; bank.position.set(0, 0.06, zo); g.add(bank);
     }
@@ -191,15 +228,18 @@
     }
   }
 
-  // ===================== BOSQUE + COLINAS =====================
+  // ===================== BOSQUE + COLINAS + ROCAS =====================
   function addForestAndHills() {
     const matT = new THREE.MeshLambertMaterial({ color: 0x594630 });
     const matL1 = new THREE.MeshLambertMaterial({ color: 0x2f5f33 });
     const matL2 = new THREE.MeshLambertMaterial({ color: 0x3a7038 });
     const matH = new THREE.MeshLambertMaterial({ color: 0x5b7a3e });
+    const matR = new THREE.MeshLambertMaterial({ color: 0x7a7060 });
+
+    // Bosques en las 4 esquinas del mapa base (dentro de 400x400)
     for (const center of [[-140, -100], [140, -100], [-140, 100], [140, 100]]) {
-      for (let i = 0; i < 24; i++) {
-        const x = center[0] + rnd(-35, 35), z = center[1] + rnd(-35, 35);
+      for (let i = 0; i < 30; i++) {
+        const x = center[0] + rnd(-40, 40), z = center[1] + rnd(-40, 40);
         const t = new THREE.Group(); t.position.set(x, 0, z);
         const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2.5, 6), matT);
         trunk.position.y = 1.25; trunk.castShadow = true; t.add(trunk);
@@ -208,11 +248,39 @@
         API.scene.add(t);
       }
     }
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2, rad = 200 + rnd(-20, 20);
-      const hill = new THREE.Mesh(new THREE.SphereGeometry(rnd(14, 24), 12, 8), matH);
-      hill.scale.y = 0.25; hill.position.set(Math.cos(a) * rad, -1, Math.sin(a) * rad);
+
+    // Bosque adicional en el anillo extendido (entre radio 220 y 380)
+    for (let i = 0; i < 120; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const rad = rnd(220, 380);
+      const x = Math.cos(a) * rad, z = Math.sin(a) * rad;
+      // Evitar aeropuertos y bases
+      if (Math.abs(x) < 150 && Math.abs(z) < 300) continue;
+      const t = new THREE.Group(); t.position.set(x, 0, z);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2.5, 6), matT);
+      trunk.position.y = 1.25; t.add(trunk);
+      const leaves = new THREE.Mesh(new THREE.ConeGeometry(rnd(1.8, 2.6), rnd(4, 6.5), 7), i % 2 ? matL1 : matL2);
+      leaves.position.y = 4.5; t.add(leaves);
+      API.scene.add(t);
+    }
+
+    // Colinas en el anillo externo
+    for (let i = 0; i < 20; i++) {
+      const a = (i / 20) * Math.PI * 2 + rnd(-0.1, 0.1), rad = 230 + rnd(-30, 30);
+      const hill = new THREE.Mesh(new THREE.SphereGeometry(rnd(18, 30), 12, 8), matH);
+      hill.scale.y = 0.22;
+      hill.position.set(Math.cos(a) * rad, -1, Math.sin(a) * rad);
       hill.receiveShadow = true; API.scene.add(hill);
+    }
+
+    // Rocas dispersas
+    for (let i = 0; i < 40; i++) {
+      const a = Math.random() * Math.PI * 2, rad = rnd(200, 400);
+      const r = new THREE.Mesh(new THREE.DodecahedronGeometry(rnd(1.5, 3.5), 0), matR);
+      r.position.set(Math.cos(a) * rad, 0.5, Math.sin(a) * rad);
+      r.rotation.set(rnd(0,3), rnd(0,3), rnd(0,3));
+      r.castShadow = true;
+      API.scene.add(r);
     }
   }
 
@@ -223,7 +291,8 @@
     const matRoof  = new THREE.MeshLambertMaterial({ color: 0x4a4a4a });
     const matStack = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
     const matRed   = new THREE.MeshLambertMaterial({ color: 0xaa2222 });
-    for (const base of [[-150, -30], [150, -30], [-150, 30], [150, 30]]) {
+    // Mover las fábricas fuera de las carreteras base (x=±180, z=±120)
+    for (const base of [[-180, -120], [180, -120], [-180, 120], [180, 120]]) {
       const bx = base[0], bz = base[1];
       const nave = new THREE.Mesh(new THREE.BoxGeometry(22, 8, 14), matBrick);
       nave.position.set(bx, 4, bz); nave.castShadow = true; nave.receiveShadow = true; API.scene.add(nave);
@@ -236,14 +305,10 @@
       mod.smokes.push({ mesh: smoke, baseY: 21, t: Math.random() * 6 });
       const chim2 = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.5, 14, 8), matStack); chim2.position.set(bx - 7, 7, bz + 3); chim2.castShadow = true; API.scene.add(chim2);
       const alm = new THREE.Mesh(new THREE.BoxGeometry(8, 4, 8), matConc); alm.position.set(bx - 12, 2, bz - 6); API.scene.add(alm);
-      for (let i = 0; i < 10; i++) {
-        const p = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.5, 0.2), matConc);
-        p.position.set(bx - 12 + i * 2.4, 0.75, bz + 9); API.scene.add(p);
-      }
     }
   }
 
-  // ===================== POSTES DE LUZ =====================
+  // ===================== POSTES DE LUZ (carreteras base) =====================
   function addStreetLights() {
     const matPost = new THREE.MeshLambertMaterial({ color: 0x333333 });
     const matLamp = new THREE.MeshBasicMaterial({ color: 0xfff2b0 });
@@ -438,44 +503,34 @@
     const wtop = new THREE.Mesh(new THREE.ConeGeometry(3.8, 1.2, 14), matMetal);
     wtop.position.set(wtx, 15.6, wtz); g.add(wtop);
 
-    return { team, mesh: g, x, z, rotY, radarPivot: rg, helipad: { x: hpX, z: hpZ } };
+    return { team, mesh: g, x, z, rotY, radarPivot: rg };
   }
 
-  // ===================== PISTAS (config corregida) =====================
-  // Cada aeropuerto tiene su pista orientada en Z. Definimos:
-  //   takeoffStart → takeoffEnd : dirección de despegue
-  //   approach     → threshold  : tramo de aproximación (aterrizaje)
-  //   threshold    → rolloutEnd : rodadura tras tocar tierra
-  // Ally: despega de sur (-155) a norte (-25), aterriza del norte (-25) al sur (-155)
-  // Enemy: despega de norte (155) a sur (25), aterriza del sur (25) al norte (155)
+  // ===================== RUNWAYS (posiciones NUEVAS) =====================
   const runways = {
     ally: {
-      centerX: -100,
-      takeoffStart: V(-100, GROUND_Y, -155),
-      takeoffEnd:   V(-100, GROUND_Y, -25),
+      takeoffStart: V(-60, GROUND_Y, -265),
+      takeoffEnd:   V(-60, GROUND_Y, -135),
       takeoffDir:   V(0, 0, 1),
-      takeoffHeading: 0,                       // mirando +Z
-      approach:     V(-100, CRUISE_ALT, -25 + APPROACH_DIST),   // (-100, alt, 135)
-      threshold:    V(-100, GROUND_Y, -25),
-      landingDir:   V(0, 0, -1),               // se mueve en -Z
+      takeoffHeading: 0,
+      approach:     V(-60, CRUISE_ALT, -135 + APPROACH_DIST),   // (-60, 32, 35)
+      threshold:    V(-60, GROUND_Y, -135),
+      landingDir:   V(0, 0, -1),
       landingHeading: Math.PI,
-      rolloutEnd:   V(-100, GROUND_Y, -155),
-      apronBase:    V(-82, GROUND_Y, -155),    // junto a la cabecera sur
-      helipad:      V(-100 + 45, 0.4, -90 + 30), // hpX, hpZ locales
+      rolloutEnd:   V(-60, GROUND_Y, -265),
+      apronBase:    V(-42, GROUND_Y, -150),   // taxiway norte, más cerca del takeoff
     },
     enemy: {
-      centerX: 100,
-      takeoffStart: V(100, GROUND_Y, 155),
-      takeoffEnd:   V(100, GROUND_Y, 25),
+      takeoffStart: V(60, GROUND_Y, 265),
+      takeoffEnd:   V(60, GROUND_Y, 135),
       takeoffDir:   V(0, 0, -1),
-      takeoffHeading: Math.PI,                 // mirando -Z
-      approach:     V(100, CRUISE_ALT, 25 - APPROACH_DIST),     // (100, alt, -135)
-      threshold:    V(100, GROUND_Y, 25),
+      takeoffHeading: Math.PI,
+      approach:     V(60, CRUISE_ALT, 135 - APPROACH_DIST),     // (60, 32, -35)
+      threshold:    V(60, GROUND_Y, 135),
       landingDir:   V(0, 0, 1),
       landingHeading: 0,
-      rolloutEnd:   V(100, GROUND_Y, 155),
-      apronBase:    V(82, GROUND_Y, 155),
-      helipad:      V(100 + 45, 0.4, 90 + 30),
+      rolloutEnd:   V(60, GROUND_Y, 265),
+      apronBase:    V(42, GROUND_Y, 150),
     },
   };
 
@@ -529,9 +584,14 @@
     }
     API.scene.add(g);
 
-    // Apron: a la derecha de la cabecera sur (ally) o norte (enemy), separados por slot
+    // Apron: a lo largo del taxiway, separado por slot en Z
     const apron = rw.apronBase.clone();
-    apron.x += (slot - 1) * 8;
+    apron.z += (slot - 1) * 10;
+
+    // Yaw inicial: mirando hacia el takeoffStart
+    const dx = rw.takeoffStart.x - apron.x;
+    const dz = rw.takeoffStart.z - apron.z;
+    const yaw0 = yawFromDir(dx, dz);
 
     const unit = {
       type: 'plane', team, mesh: g,
@@ -539,14 +599,14 @@
       isDead: false, respawnTimer: 0,
       basePos: apron.clone(),
       cooldown: 0, missileCooldown: 0,
-      flames, yaw: rw.takeoffHeading, pitch: 0, roll: 0,
+      flames, yaw: yaw0, pitch: 0, roll: 0,
       state: 'parked',
       stateT: 4 + slot * 3 + rnd(0, 3),
       rollSpeed: 0,
       groundTime: 0,
       rw, apron,
       patrolAngle: Math.random() * Math.PI * 2,
-      patrolRadius: rnd(60, 110),
+      patrolRadius: rnd(70, 130),
       combatTime: 0,
     };
     unit.mesh.rotation.order = 'YXZ';
@@ -627,6 +687,7 @@
   }
 
   // ===================== CREAR MUNDO =====================
+  extendWorld();
   addClouds();
   addDistantMountains();
   addRiver();
@@ -634,26 +695,38 @@
   addIndustrialZone();
   addStreetLights();
 
-  buildHQ('ally', 0, -140);
-  buildHQ('enemy', 0, 140);
-  const allyAirport  = buildAirport('ally',  -100, -90, 0);
-  const enemyAirport = buildAirport('enemy',  100,  90, Math.PI);
+  buildHQ('ally',  ALLY_HQ_POS.x,  ALLY_HQ_POS.z);
+  buildHQ('enemy', ENEMY_HQ_POS.x, ENEMY_HQ_POS.z);
+  const allyAirport  = buildAirport('ally',  ALLY_AIRPORT.x,  ALLY_AIRPORT.z, 0);
+  const enemyAirport = buildAirport('enemy', ENEMY_AIRPORT.x, ENEMY_AIRPORT.z, Math.PI);
 
   for (let i = 0; i < 3; i++) {
     buildFighter(0x0055ff, 'ally', runways.ally, i);
     buildFighter(0xff2222, 'enemy', runways.enemy, i);
   }
   for (let i = 0; i < 2; i++) {
-    buildAttackHeli(0x0055ff, 'ally', -70 + i * 14, -105);
-    buildAttackHeli(0xff2222, 'enemy', 70 - i * 14, 105);
+    buildAttackHeli(0x0055ff, 'ally', -70 + i * 14, -110);
+    buildAttackHeli(0xff2222, 'enemy', 70 - i * 14, 110);
   }
 
   // ===================== UPDATE CAZAS =====================
   const _d = new THREE.Vector3();
   const _p = new THREE.Vector3();
 
+  function resetPlane(p, delay) {
+    p.state = 'parked';
+    p.stateT = delay || 5;
+    p.rollSpeed = 0;
+    p.groundTime = 0;
+    p.mesh.position.copy(p.apron);
+    p.mesh.position.y = GROUND_Y;
+    const dx = p.rw.takeoffStart.x - p.apron.x;
+    const dz = p.rw.takeoffStart.z - p.apron.z;
+    p.yaw = yawFromDir(dx, dz);
+    p.mesh.rotation.set(0, p.yaw, 0);
+  }
+
   function updatePlane(p, dt) {
-    // ---- MUERTO ----
     if (p.isDead) {
       p.respawnTimer += dt;
       p.mesh.visible = false;
@@ -662,15 +735,8 @@
         p.hp = p.maxHp; p.isDead = false;
         p.mesh.visible = true;
         if (p.hpGroup) p.hpGroup.visible = true;
-        p.mesh.position.copy(p.apron);
-        p.mesh.position.y = GROUND_Y;
-        p.state = 'parked';
-        p.stateT = 8;
-        p.rollSpeed = 0;
-        p.yaw = p.rw.takeoffHeading;
-        p.mesh.rotation.set(0, p.yaw, 0);
+        resetPlane(p, 8);
         p.respawnTimer = 0;
-        p.groundTime = 0;
       }
       return;
     }
@@ -678,46 +744,45 @@
     p.cooldown -= dt;
     p.missileCooldown -= dt;
 
-    // ---- FAILSAFE: si lleva mucho tiempo en el suelo sin avanzar, resetear ----
-    const onGround = p.mesh.position.y < 3;
-    const inGroundState = p.state === 'parked' || p.state === 'taxi_out' || p.state === 'taxi_in';
-    if (onGround && !inGroundState && p.state !== 'takeoff' && p.state !== 'rollout') {
-      p.groundTime += dt;
-    } else {
-      p.groundTime = 0;
+    // Failsafe A: fuera de límites
+    if (Math.abs(p.mesh.position.x) > WORLD_SIZE * 0.55 ||
+        Math.abs(p.mesh.position.z) > WORLD_SIZE * 0.55) {
+      console.warn(`⚠️ Caza ${p.team} fuera de límites`);
+      resetPlane(p, 5);
+      return;
     }
+    // Failsafe B: atascado en suelo sin moverse
+    const onGround = p.mesh.position.y < 3;
+    const okGround = (p.state === 'parked' || p.state === 'taxi_out' || p.state === 'taxi_in' ||
+                      p.state === 'takeoff' || p.state === 'rollout');
+    if (onGround && !okGround) p.groundTime += dt; else p.groundTime = 0;
     if (p.groundTime > 15) {
-      console.warn(`⚠️ Caza ${p.team} trabado en suelo, reseteando`);
-      p.state = 'parked';
-      p.mesh.position.copy(p.apron);
-      p.mesh.position.y = GROUND_Y;
-      p.yaw = p.rw.takeoffHeading;
-      p.mesh.rotation.set(0, p.yaw, 0);
-      p.stateT = 5;
-      p.rollSpeed = 0;
-      p.groundTime = 0;
+      console.warn(`⚠️ Caza ${p.team} atascado en suelo`);
+      resetPlane(p, 5);
       return;
     }
 
-    // ================== MÁQUINA DE ESTADOS ==================
     switch (p.state) {
 
-      // ---------- APARCADO ----------
       case 'parked': {
         p.stateT -= dt;
         stepToward(p.mesh.position, p.apron, TAXI_SPEED * dt);
-        p.yaw = rotateSmooth(p.yaw, p.rw.takeoffHeading, dt, 2);
-        p.mesh.rotation.set(0, p.yaw, 0);
+        p.mesh.position.y = GROUND_Y;
         if (p.stateT <= 0) {
+          const dx = p.rw.takeoffStart.x - p.mesh.position.x;
+          const dz = p.rw.takeoffStart.z - p.mesh.position.z;
+          p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 2);
+          p.mesh.rotation.set(0, p.yaw, 0);
           p.state = 'taxi_out';
+        } else {
+          // Solo rota al objetivo, sin avanzar
+          p.mesh.rotation.set(0, p.yaw, 0);
         }
         return;
       }
 
-      // ---------- RODAJE AL PUNTO DE DESPEGUE ----------
       case 'taxi_out': {
-        const target = p.rw.takeoffStart.clone();
-        target.y = GROUND_Y;
+        const target = p.rw.takeoffStart.clone(); target.y = GROUND_Y;
         stepToward(p.mesh.position, target, TAXI_SPEED * dt);
         const dx = target.x - p.mesh.position.x;
         const dz = target.z - p.mesh.position.z;
@@ -726,7 +791,6 @@
         }
         p.mesh.position.y = GROUND_Y;
         p.mesh.rotation.set(0, p.yaw, 0);
-        // Llegó a la cabecera → despegar
         if (p.mesh.position.distanceTo(target) < 3) {
           p.state = 'takeoff';
           p.rollSpeed = 0;
@@ -734,7 +798,6 @@
         return;
       }
 
-      // ---------- CARRERA DE DESPEGUE ----------
       case 'takeoff': {
         p.rollSpeed = Math.min(ROLL_SPEED, p.rollSpeed + 45 * dt);
         p.mesh.position.addScaledVector(p.rw.takeoffDir, p.rollSpeed * dt);
@@ -742,55 +805,38 @@
         p.yaw = rotateSmooth(p.yaw, p.rw.takeoffHeading, dt, 4);
         p.mesh.rotation.set(0, p.yaw, 0);
         for (const f of p.flames) f.visible = true;
-        // Pasó la cabecera opuesta → ascender
-        const distFromStart = p.mesh.position.distanceTo(p.rw.takeoffStart);
-        if (distFromStart > 125) {
-          p.state = 'climb';
-          p.climbT = 0;
+        if (p.mesh.position.distanceTo(p.rw.takeoffStart) > 125) {
+          p.state = 'climb'; p.climbT = 0;
         }
         return;
       }
 
-      // ---------- ASCENSO ----------
       case 'climb': {
         p.climbT = (p.climbT || 0) + dt;
-        const dur = 2.5;
-        const k = Math.min(1, p.climbT / dur);
+        const k = Math.min(1, p.climbT / 2.5);
         p.mesh.position.addScaledVector(p.rw.takeoffDir, CRUISE_SPEED * dt);
         p.mesh.position.y = GROUND_Y + k * (CRUISE_ALT - GROUND_Y);
         p.yaw = rotateSmooth(p.yaw, p.rw.takeoffHeading, dt, 3);
-        p.mesh.rotation.set(-0.2 * (1 - k), p.yaw, 0);   // nariz arriba suavemente
-        if (k >= 1) {
-          p.state = 'combat';
-          p.combatTime = 0;
-          p.mesh.rotation.set(0, p.yaw, 0);
-        }
+        p.mesh.rotation.set(-0.2 * (1 - k), p.yaw, 0);
+        if (k >= 1) { p.state = 'combat'; p.combatTime = 0; p.mesh.rotation.set(0, p.yaw, 0); }
         return;
       }
 
-      // ---------- COMBATE ----------
       case 'combat': {
         p.combatTime += dt;
         runCombat(p, dt);
-        // Vuelve a base tras 40s o si está dañado
-        if (p.combatTime > 40 || p.hp < 35) {
-          p.state = 'return';
-        }
+        if (p.combatTime > 40 || p.hp < 35) p.state = 'return';
         return;
       }
 
-      // ---------- REGRESO ----------
       case 'return': {
-        const wp = p.rw.approach.clone();
-        wp.y = CRUISE_ALT;
+        const wp = p.rw.approach.clone(); wp.y = CRUISE_ALT;
         const r = stepToward(p.mesh.position, wp, CRUISE_SPEED * dt);
         const dx = wp.x - p.mesh.position.x;
         const dz = wp.z - p.mesh.position.z;
-        if (Math.abs(dx) + Math.abs(dz) > 1) {
-          p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
-        }
+        if (Math.abs(dx) + Math.abs(dz) > 1) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
         p.mesh.rotation.set(0, p.yaw, 0);
-        p.mesh.position.y = CRUISE_ALT;   // mantener altitud
+        p.mesh.position.y = CRUISE_ALT;
         for (const f of p.flames) f.visible = true;
         if (r.distance < 5) {
           p.state = 'approach';
@@ -800,29 +846,27 @@
         return;
       }
 
-      // ---------- APROXIMACIÓN FINAL (descenso) ----------
       case 'approach': {
-        // Interpolación lineal desde approachStart hasta threshold
         p.approachT = (p.approachT || 0) + dt;
         const start = p.approachStart;
-        const end = p.rw.threshold.clone();
-        end.y = GROUND_Y;
+        const end = p.rw.threshold.clone(); end.y = GROUND_Y;
         const total = start.distanceTo(end);
         const covered = p.approachT * CRUISE_SPEED;
         const k = Math.min(1, covered / total);
-        p.mesh.position.lerpVectors(start, end, k);
-        // Encarar hacia el threshold
+        // Curva de descenso exponencial: mantiene altitud y baja al final
+        const kAlt = Math.pow(k, 2.5);
+        // Interpolación horizontal lineal, vertical con kAlt
+        const px = start.x + (end.x - start.x) * k;
+        const pz = start.z + (end.z - start.z) * k;
+        const py = start.y - (start.y - end.y) * kAlt;
+        p.mesh.position.set(px, py, pz);
         const dx = end.x - p.mesh.position.x;
         const dz = end.z - p.mesh.position.z;
-        if (Math.abs(dx) + Math.abs(dz) > 1) {
-          p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
-        }
-        p.mesh.rotation.set(-0.15 * (1 - k), p.yaw, 0);   // nariz ligeramente arriba
+        if (Math.abs(dx) + Math.abs(dz) > 1) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
+        p.mesh.rotation.set(-0.12 * (1 - k), p.yaw, 0);
         for (const f of p.flames) f.visible = false;
-        // Llegó al threshold → tocar tierra
         if (k >= 1 || p.mesh.position.distanceTo(end) < 3) {
           p.mesh.position.copy(end);
-          p.mesh.position.y = GROUND_Y;
           p.yaw = p.rw.landingHeading;
           p.mesh.rotation.set(0, p.yaw, 0);
           p.state = 'rollout';
@@ -831,7 +875,6 @@
         return;
       }
 
-      // ---------- RODADURA TRAS ATERRIZAR ----------
       case 'rollout': {
         p.rollSpeed = Math.max(0, p.rollSpeed - 22 * dt);
         p.mesh.position.addScaledVector(p.rw.landingDir, p.rollSpeed * dt);
@@ -839,46 +882,29 @@
         p.yaw = p.rw.landingHeading;
         p.mesh.rotation.set(0, p.yaw, 0);
         const dEnd = p.mesh.position.distanceTo(p.rw.rolloutEnd);
-        if (p.rollSpeed < 1 || dEnd < 5) {
-          p.state = 'taxi_in';
-        }
+        if (p.rollSpeed < 1 || dEnd < 5) p.state = 'taxi_in';
         return;
       }
 
-      // ---------- RODAJE AL APRON ----------
       case 'taxi_in': {
         stepToward(p.mesh.position, p.apron, TAXI_SPEED * dt);
         const dx = p.apron.x - p.mesh.position.x;
         const dz = p.apron.z - p.mesh.position.z;
-        if (Math.abs(dx) + Math.abs(dz) > 0.5) {
-          p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
-        }
+        if (Math.abs(dx) + Math.abs(dz) > 0.5) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
         p.mesh.position.y = GROUND_Y;
         p.mesh.rotation.set(0, p.yaw, 0);
         if (p.mesh.position.distanceTo(p.apron) < 2) {
-          p.state = 'parked';
-          p.stateT = 15 + rnd(0, 8);
           p.hp = Math.min(p.maxHp, p.hp + 60);
-          p.yaw = p.rw.takeoffHeading;
-          p.mesh.rotation.set(0, p.yaw, 0);
+          resetPlane(p, 15 + rnd(0, 8));
         }
         return;
       }
 
-      default: {
-        // Estado desconocido → forzar parked
-        p.state = 'parked';
-        p.mesh.position.copy(p.apron);
-        p.mesh.position.y = GROUND_Y;
-        p.stateT = 5;
-        return;
-      }
+      default: resetPlane(p, 5); return;
     }
   }
 
-  // ===================== COMBATE (reutilizable) =====================
   function runCombat(p, dt) {
-    // Objetivos aéreos enemigos que estén en vuelo
     let target = null, tDist = 1e9;
     for (const c of mod.planes.concat(mod.helis)) {
       if (c.team === p.team || c.isDead) continue;
@@ -886,7 +912,6 @@
       const d = p.mesh.position.distanceTo(c.mesh.position);
       if (d < tDist) { tDist = d; target = c; }
     }
-    // Objetivos terrestres
     let gt = null, gDist = 1e9;
     if (!target || tDist > 120) {
       for (const s of API.soldiers) {
@@ -895,20 +920,16 @@
         if (d < gDist) { gDist = d; gt = s; }
       }
     }
-
-    // Patrulla / persecución
     if (target && tDist < 180) {
       p.patrolAngle += dt * 0.5;
-      _d.copy(target.mesh.position);
-      _d.y = CRUISE_ALT;
+      _d.copy(target.mesh.position); _d.y = CRUISE_ALT;
       _d.x += Math.cos(p.patrolAngle * 3) * 25;
       _d.z += Math.sin(p.patrolAngle * 3) * 25;
     } else {
       p.patrolAngle += dt * 0.15;
-      const cz = p.team === 'ally' ? -50 : 50;
+      const cz = p.team === 'ally' ? -60 : 60;
       _d.set(Math.cos(p.patrolAngle) * p.patrolRadius, CRUISE_ALT, cz + Math.sin(p.patrolAngle) * p.patrolRadius);
     }
-
     const dir = _p.copy(_d).sub(p.mesh.position);
     const dist = dir.length();
     if (dist > 0.5) {
@@ -916,44 +937,28 @@
       p.mesh.position.addScaledVector(dir, Math.min(CRUISE_SPEED * dt, dist));
       const yawT = yawFromDir(dir.x, dir.z);
       p.yaw = rotateSmooth(p.yaw, yawT, dt, 4);
-      p.mesh.rotation.y = p.yaw;
-      p.mesh.rotation.x = -dir.y * 0.4;
-      // Roll suave
       let yawDiff = yawT - p.yaw;
       while (yawDiff >  Math.PI) yawDiff -= 2 * Math.PI;
       while (yawDiff < -Math.PI) yawDiff += 2 * Math.PI;
-      p.mesh.rotation.z = -yawDiff * 1.2;
+      p.mesh.rotation.set(-dir.y * 0.4, p.yaw, -yawDiff * 1.2);
     }
-
-    // Disparar cañón
-    if (target && p.cooldown <= 0 && tDist < 160) {
-      API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xffff44, 22, p.team);
-      API.playSound('shot');
-      p.cooldown = 0.12;
-    } else if (gt && p.cooldown <= 0 && gDist < 60) {
-      API.fireProjectile(p.mesh.position.clone(), gt.mesh.position.clone(), 0xffff44, 15, p.team);
-      API.playSound('shot');
-      p.cooldown = 0.25;
-    }
-    // Misil
-    if (target && p.missileCooldown <= 0 && tDist < 130 && tDist > 25) {
-      API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xff6600, 60, p.team);
-      API.playSound('explosion');
-      p.missileCooldown = 3.5;
-    }
-
-    // Flamas
     for (const f of p.flames) { f.visible = true; f.scale.setScalar(0.7 + Math.random() * 0.6); }
 
-    if (p.hp <= 0) {
-      p.isDead = true;
-      p.respawnTimer = 0;
-      p.mesh.rotation.set(0, p.yaw, 0);
-      API.playSound('explosion');
+    if (target && p.cooldown <= 0 && tDist < 160) {
+      API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xffff44, 22, p.team);
+      API.playSound('shot'); p.cooldown = 0.12;
+    } else if (gt && p.cooldown <= 0 && gDist < 60) {
+      API.fireProjectile(p.mesh.position.clone(), gt.mesh.position.clone(), 0xffff44, 15, p.team);
+      API.playSound('shot'); p.cooldown = 0.25;
     }
+    if (target && p.missileCooldown <= 0 && tDist < 130 && tDist > 25) {
+      API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xff6600, 60, p.team);
+      API.playSound('explosion'); p.missileCooldown = 3.5;
+    }
+    if (p.hp <= 0) { p.isDead = true; p.respawnTimer = 0; API.playSound('explosion'); }
   }
 
-  // ===================== UPDATE HELIS =====================
+  // ===================== HELIS =====================
   function updateHeli(h, dt) {
     if (h.isDead) {
       h.respawnTimer += dt;
@@ -967,6 +972,12 @@
       }
       return;
     }
+    // Failsafe heli
+    if (Math.abs(h.mesh.position.x) > WORLD_SIZE * 0.55 ||
+        Math.abs(h.mesh.position.z) > WORLD_SIZE * 0.55) {
+      h.mesh.position.copy(h.basePos);
+    }
+
     if (h.rotorMain) h.rotorMain.rotation.y += 40 * dt;
     if (h.rotorTail) h.rotorTail.rotation.x += 45 * dt;
     h.cooldown -= dt; h.missileCooldown -= dt;
@@ -991,8 +1002,7 @@
         if (d < gDist) { gDist = d; gt = v; }
       }
     }
-
-    const altBase = 18;
+    const altBase = 20;
     if (target && tDist < 160) {
       h.strafeTimer += dt;
       _d.copy(target.mesh.position); _d.y = altBase;
@@ -1005,10 +1015,9 @@
       _d.z += Math.sin(h.strafeTimer * 1.2) * 28;
     } else {
       h.patrolAngle += dt * 0.3;
-      const cz = h.team === 'ally' ? -30 : 30;
-      _d.set(Math.cos(h.patrolAngle) * 60, altBase + Math.sin(h.patrolAngle * 2) * 5, cz + Math.sin(h.patrolAngle) * 60);
+      const cz = h.team === 'ally' ? -40 : 40;
+      _d.set(Math.cos(h.patrolAngle) * 70, altBase + Math.sin(h.patrolAngle * 2) * 5, cz + Math.sin(h.patrolAngle) * 70);
     }
-
     const dir = _p.copy(_d).sub(h.mesh.position);
     const dist = dir.length();
     if (dist > 0.5) {
@@ -1019,7 +1028,6 @@
       h.mesh.rotation.y = h.yaw;
       h.mesh.rotation.z = -0.6 * (yawT - h.yaw);
     }
-
     if (h.turret) {
       const tgtPos = target ? target.mesh.position : (gt ? gt.mesh.position : null);
       if (tgtPos) {
@@ -1029,7 +1037,6 @@
         h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
       }
     }
-
     if (target && h.cooldown <= 0 && tDist < 90) {
       const m = h.mesh.position.clone(); m.y -= 0.5;
       API.fireProjectile(m, target.mesh.position.clone(), 0xffff00, 12, h.team);
@@ -1046,7 +1053,7 @@
     if (h.hp <= 0) { h.isDead = true; h.respawnTimer = 0; API.playSound('explosion'); }
   }
 
-  // ===================== DAÑO DEL MOD =====================
+  // ===================== DAÑO =====================
   function resolveModDamage() {
     const all = [...mod.planes, ...mod.helis, ...mod.hqs];
     for (let i = API.projectiles.length - 1; i >= 0; i--) {
@@ -1066,7 +1073,7 @@
     }
   }
 
-  // ===================== ANIMACIONES ESCENARIO =====================
+  // ===================== ESCENARIO ANIM =====================
   function updateSmokes(dt) {
     for (const s of mod.smokes) {
       s.t += dt;
@@ -1077,12 +1084,13 @@
     }
   }
   function updateClouds(dt) {
+    const R = WORLD_SIZE * 0.55;
     for (const c of mod.clouds) {
       c.mesh.position.x += c.speed * dt;
       c.mesh.position.z += c.drift * dt;
-      if (c.mesh.position.x > 340) {
-        c.mesh.position.x = -340;
-        c.mesh.position.z = rnd(-320, 320);
+      if (c.mesh.position.x > R) {
+        c.mesh.position.x = -R;
+        c.mesh.position.z = rnd(-R, R);
       }
     }
   }
@@ -1121,7 +1129,7 @@
     }
     if (mod.gameOver) return;
     for (const hq of mod.hqs) if (hq.radarGroup) hq.radarGroup.rotation.y += dt * 0.9;
-    for (const ap of [allyAirport, enemyAirport]) if (ap.radarPivot) ap.radarPivot.rotation.y += dt * 1.3;
+    for (const ap of [allyAirport, enemyAirport]) if (ap && ap.radarPivot) ap.radarPivot.rotation.y += dt * 1.3;
     for (const p of mod.planes) { try { updatePlane(p, dt); } catch (e) { console.error('plane err', e); } }
     for (const h of mod.helis)  { try { updateHeli(h, dt);  } catch (e) { console.error('heli err', e); } }
     updateSmokes(dt);
@@ -1131,12 +1139,6 @@
     checkWinLose();
   };
 
-  window.AirConquestMod = {
-    version: '3.0',
-    hqs: mod.hqs,
-    planes: mod.planes,
-    helis: mod.helis,
-  };
-
-  console.log(`✈️ Mod Aire y Conquista v3.0 listo — ${mod.planes.length} cazas con ciclo de vuelo corregido, ${mod.helis.length} helis, ${mod.clouds.length} nubes.`);
+  window.AirConquestMod = { version: '4.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis };
+  console.log(`✈️ Mod Aire y Conquista v4.0 listo — mapa ${WORLD_SIZE}×${WORLD_SIZE}, ${mod.planes.length} cazas, ${mod.helis.length} helis.`);
 })();
