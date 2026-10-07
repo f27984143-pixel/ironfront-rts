@@ -248,36 +248,100 @@ function init() {
   cargarMods();
 }
 
-// ====== CARGADOR DE MODS ======
+// ====== CARGADOR DE MODS (auto-descubrimiento vía GitHub API) ======
+// No hace falta editar nada: sube cualquier .js a /modificaciones/ o /mods/
+// y el juego lo carga solo. También acepta mods.json si existe.
 async function cargarMods() {
-  try {
-    const respuesta = await fetch('mods/mods.json');
-    if (!respuesta.ok) {
-      console.warn('mods.json no encontrado, saltando mods.');
-      return;
-    }
-    const mods = await respuesta.json();
-    console.log(`🔧 Ironfront: ${mods.length} mod(s) detectado(s).`);
+  const CARPETAS = ['modificaciones', 'mods'];
+  const cargados = new Set();
 
-    for (const mod of mods) {
-      if (mod.activo === false) continue;
-      console.log(`🔧 Cargando mod: ${mod.nombre || mod.archivo}`);
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = mod.archivo;
-        script.onload = resolve;
-        script.onerror = () => {
-          console.error(`❌ Error al cargar el mod: ${mod.archivo}`);
-          reject(new Error(`No se pudo cargar ${mod.archivo}`));
-        };
-        document.body.appendChild(script);
-      });
+  // -- 1) Auto-descubrimiento vía GitHub API --
+  try {
+    const host  = location.hostname;
+    const parts = location.pathname.split('/').filter(Boolean);
+    if (host.endsWith('.github.io') && parts.length >= 1) {
+      const usuario = host.replace('.github.io', '');
+      const repo    = parts[0];
+      const apiBase = `https://api.github.com/repos/${usuario}/${repo}/contents`;
+
+      for (const carpeta of CARPETAS) {
+        let ok = false;
+        for (const ref of ['main', 'master']) {
+          if (ok) break;
+          try {
+            const r = await fetch(`${apiBase}/${carpeta}?ref=${ref}`, { cache: 'no-store' });
+            if (!r.ok) continue;
+            const items = await r.json();
+            if (!Array.isArray(items)) continue;
+            ok = true;
+
+            for (const it of items) {
+              if (it.type !== 'file') continue;
+              if (!/\.js$/i.test(it.name)) continue;
+              if (it.name.toLowerCase() === 'mods.json') continue;
+              const url = `${carpeta}/${it.name}`;
+              if (cargados.has(url)) continue;
+              if (await inyectarScript(url)) cargados.add(url);
+            }
+          } catch (_) {}
+        }
+      }
+      console.log(`🔎 GitHub detectado: ${usuario}/${repo}`);
     }
-    console.log('✅ Todos los mods se cargaron correctamente.');
-    if(window.IronfrontAPI) window.IronfrontAPI.modsLoaded = true;
-  } catch (error) {
-    console.error('❌ Error en el sistema de mods:', error);
+  } catch (e) { console.warn('GitHub API no disponible:', e); }
+
+  // -- 2) Fallback local: mod1.js, mod2.js, ... --
+  if (cargados.size === 0) {
+    for (const base of CARPETAS) {
+      let fallos = 0;
+      for (let i = 1; i <= 30 && fallos < 3; i++) {
+        const url = `${base}/mod${i}.js`;
+        if (cargados.has(url)) { fallos = 0; continue; }
+        if (await existeScript(url) && await inyectarScript(url)) { cargados.add(url); fallos = 0; }
+        else fallos++;
+      }
+    }
   }
+
+  // -- 3) Compatibilidad con mods.json existente --
+  for (const base of CARPETAS) {
+    try {
+      const r = await fetch(`${base}/mods.json`, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const lista = await r.json();
+      for (const m of lista) {
+        if (m.activo === false) continue;
+        const url = m.archivo.includes('/') ? m.archivo : `${base}/${m.archivo}`;
+        if (cargados.has(url)) continue;
+        if (await inyectarScript(url)) cargados.add(url);
+      }
+    } catch (_) {}
+  }
+
+  console.log(cargados.size
+    ? `✅ Mods cargados (${cargados.size}):`
+    : 'ℹ️ Sin mods detectados.', [...cargados]);
+
+  if (window.IronfrontAPI) {
+    window.IronfrontAPI.modsLoaded = true;
+    window.IronfrontAPI.modsCargados = [...cargados];
+  }
+}
+
+function existeScript(url) {
+  return fetch(url, { method: 'HEAD', cache: 'no-store' })
+    .then(r => r.ok)
+    .catch(() => false);
+}
+
+function inyectarScript(url) {
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.onload  = () => { console.log('🔧 Mod cargado:', url); resolve(true); };
+    s.onerror = () => { console.error('❌ Error al ejecutar:', url); resolve(false); };
+    document.body.appendChild(s);
+  });
 }
 
 function createEnvironment() {
