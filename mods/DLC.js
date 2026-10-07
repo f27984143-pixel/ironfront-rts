@@ -1,14 +1,16 @@
 /* ============================================================
-   MOD: Aire y Conquista v4.0
-   - MAPA EXTENDIDO (900×900 visual, fog extendido)
-   - Aeropuertos movidos FUERA de la zona de casas base (z<-90 / z>90)
-   - Cuarteles al extremo del mapa
-   - Failsafe doble: timeout en suelo + fuera de límites
-   - Más decoración en el anillo exterior (árboles, colinas, rocas)
-   - Rumbos y ciclo de vuelo corregidos (v3.0)
+   MOD: Aire y Conquista v5.0
+   NUEVO:
+   - Puentes REDISEÑADOS (limpios, alineados con carreteras)
+   - COLISIÓN DE AGUA (unidades no cruzan el río caminando)
+   - EDIFICIOS DESTRUCTIBLES de 2 pisos (colapso al destruir planta baja)
+   - ÁRBOLES DESTRUCTIBLES (caen al recibir disparos)
+   - SCREEN SHAKE + partículas de polvo al destruir
+   - Todo lo de v4 (aviones, HQ, aeropuertos, etc.)
    ============================================================ */
 (function () {
-  if (window.__AIRCONQUEST_LOADED) { console.warn('⚠️ Mod ya cargado'); return; }
+  if (window.__AC_V5_LOADED) { console.warn('⚠️ v5 ya cargado'); return; }
+  window.__AC_V5_LOADED = true;
   window.__AIRCONQUEST_LOADED = true;
 
   const API = window.IronfrontAPI;
@@ -17,27 +19,33 @@
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
 
-  console.log('✈️ Mod Aire y Conquista v4.0: iniciando...');
-  API.say('✈️ Aire y Conquista v4.0');
+  console.log('✈️ Mod Aire y Conquista v5.0: iniciando...');
+  API.say('✈️ Aire y Conquista v5.0');
 
-  // ===================== CONSTANTES GLOBALES =====================
-  const GROUND_Y   = 1.0;
+  // ===================== CONSTANTES =====================
+  const GROUND_Y = 1.0;
   const CRUISE_ALT = 32;
   const TAXI_SPEED = 14;
   const ROLL_SPEED = 65;
   const CRUISE_SPEED = 52;
   const APPROACH_DIST = 170;
-  const WORLD_SIZE = 900;   // nuevo tamaño de mapa
+  const WORLD_SIZE = 900;
+  const RIVER = { zMin: 42, zMax: 68, centerZ: 55 };
+  const BRIDGES_X = [
+    { xMin: -10, xMax: 10 },
+    { xMin: -100, xMax: -80 },
+    { xMin: 80, xMax: 100 },
+  ];
 
-  // NUEVAS POSICIONES (fuera de la zona de casas base)
   const ALLY_AIRPORT  = V(-60, 0, -200);
   const ENEMY_AIRPORT = V( 60, 0,  200);
   const ALLY_HQ_POS   = V(  0, 0, -280);
   const ENEMY_HQ_POS  = V(  0, 0,  280);
 
-  const mod = { planes: [], helis: [], hqs: [], smokes: [], clouds: [], gameOver: false };
+  const mod = { planes: [], helis: [], hqs: [], buildings: [], trees: [], smokes: [], clouds: [], dust: [], gameOver: false };
+  let shakeAmount = 0;
 
-  // ===================== HUD CUARTELES =====================
+  // ===================== HUD =====================
   const hudHq = document.createElement('div');
   hudHq.style.cssText = 'position:fixed;top:6px;right:6px;z-index:26;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 9px;font:11px sans-serif;color:#fff;min-width:170px;backdrop-filter:blur(4px)';
   hudHq.innerHTML = `
@@ -62,7 +70,7 @@
   `;
   document.body.appendChild(hudHq);
 
-  // ===================== OVERLAY FIN =====================
+  // ===================== OVERLAY =====================
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);backdrop-filter:blur(6px);font-family:sans-serif;color:#fff;text-align:center';
   overlay.innerHTML = `
@@ -113,34 +121,50 @@
   }
   const yawFromDir = (dx, dz) => Math.atan2(dx, dz);
 
-  // ===================== EXTENDER MAPA =====================
+  // ===================== DUST PARTICLES =====================
+  const dustMat = new THREE.MeshBasicMaterial({ color: 0xbbaa88, transparent: true, opacity: 0.85, depthWrite: false });
+  function spawnDust(pos) {
+    for (let i = 0; i < 6; i++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(rnd(0.2, 0.5), 5, 4), dustMat.clone());
+      m.position.copy(pos);
+      m.position.x += rnd(-0.8, 0.8);
+      m.position.y += rnd(0, 1);
+      m.position.z += rnd(-0.8, 0.8);
+      API.scene.add(m);
+      mod.dust.push({ mesh: m, vel: V(rnd(-1.5, 1.5), rnd(1, 3), rnd(-1.5, 1.5)), life: 0.9, t: 0 });
+    }
+  }
+  function spawnSmokePlume(pos) {
+    for (let i = 0; i < 10; i++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(rnd(0.4, 0.9), 6, 5),
+        new THREE.MeshBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.7, depthWrite: false }));
+      m.position.copy(pos);
+      m.position.x += rnd(-1.5, 1.5);
+      m.position.y += rnd(0, 2);
+      m.position.z += rnd(-1.5, 1.5);
+      API.scene.add(m);
+      mod.dust.push({ mesh: m, vel: V(rnd(-0.8, 0.8), rnd(2, 5), rnd(-0.8, 0.8)), life: 2.2, t: 0 });
+    }
+  }
+
+  // ===================== EXTENDER MUNDO =====================
   function extendWorld() {
-    // Suelo extendido (queda debajo del base a y=0)
     const bigGround = new THREE.Mesh(
       new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE),
       new THREE.MeshLambertMaterial({ color: 0x4b6e36 })
     );
     bigGround.rotation.x = -Math.PI / 2;
     bigGround.position.y = -0.05;
-    bigGround.receiveShadow = false;
     bigGround.renderOrder = -1;
     API.scene.add(bigGround);
 
-    // Extender niebla para que el mapa nuevo sea visible
-    if (API.scene.fog) {
-      API.scene.fog.near = 150;
-      API.scene.fog.far  = WORLD_SIZE;
-    }
-
-    // Aumentar sombra de la luz para cubrir más terreno
+    if (API.scene.fog) { API.scene.fog.near = 150; API.scene.fog.far = WORLD_SIZE; }
     if (API.scene.children) {
       for (const c of API.scene.children) {
         if (c.isDirectionalLight && c.shadow) {
           const d = WORLD_SIZE * 0.4;
-          c.shadow.camera.left = -d;
-          c.shadow.camera.right = d;
-          c.shadow.camera.top = d;
-          c.shadow.camera.bottom = -d;
+          c.shadow.camera.left = -d; c.shadow.camera.right = d;
+          c.shadow.camera.top = d; c.shadow.camera.bottom = -d;
           c.shadow.camera.updateProjectionMatrix();
         }
       }
@@ -153,7 +177,7 @@
     const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
     const geo = new THREE.SphereGeometry(1, 7, 6);
     const R = WORLD_SIZE * 0.45;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 55; i++) {
       const c = new THREE.Group();
       c.position.set(rnd(-R, R), rnd(55, 110), rnd(-R, R));
       const n = 3 + Math.floor(Math.random() * 3);
@@ -169,7 +193,7 @@
     }
   }
 
-  // ===================== MONTAÑAS LEJANAS =====================
+  // ===================== MONTAÑAS =====================
   function addDistantMountains() {
     const matRock = new THREE.MeshLambertMaterial({ color: 0x6a7a6a });
     const matSnow = new THREE.MeshLambertMaterial({ color: 0xffffff });
@@ -187,101 +211,334 @@
     API.scene.add(g);
   }
 
-  // ===================== RÍO + PUENTES =====================
-  function addRiver() {
-    const g = new THREE.Group();
-    const L = WORLD_SIZE - 100;
-    const river = new THREE.Mesh(new THREE.PlaneGeometry(L, 26),
-      new THREE.MeshLambertMaterial({ color: 0x2a6fa8, transparent: true, opacity: 0.85 }));
-    river.rotation.x = -Math.PI / 2; river.position.set(0, 0.07, 0); g.add(river);
-    for (const zo of [-14, 14]) {
+  // ===================== RÍO (a z=55) + PUENTES PRO =====================
+  function addRiverAndBridges() {
+    const L = WORLD_SIZE - 80;
+    // Agua
+    const river = new THREE.Mesh(
+      new THREE.PlaneGeometry(L, RIVER.zMax - RIVER.zMin),
+      new THREE.MeshLambertMaterial({ color: 0x2a6fa8, transparent: true, opacity: 0.88 })
+    );
+    river.rotation.x = -Math.PI / 2;
+    river.position.set(0, 0.07, RIVER.centerZ);
+    API.scene.add(river);
+
+    // Orillas de arena
+    for (const zo of [RIVER.zMin - 1.5, RIVER.zMax + 1.5]) {
       const bank = new THREE.Mesh(new THREE.PlaneGeometry(L, 3),
         new THREE.MeshLambertMaterial({ color: 0xd9c68f }));
-      bank.rotation.x = -Math.PI / 2; bank.position.set(0, 0.06, zo); g.add(bank);
+      bank.rotation.x = -Math.PI / 2;
+      bank.position.set(0, 0.06, zo);
+      API.scene.add(bank);
     }
-    API.scene.add(g);
 
-    const matB = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
-    const matR = new THREE.MeshLambertMaterial({ color: 0x555555 });
-    const matP = new THREE.MeshLambertMaterial({ color: 0x6a6a5a });
-    for (const px of [-90, 0, 90]) {
-      const br = new THREE.Group(); br.position.set(px, 0, 0);
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(20, 1.2, 30), matB);
-      deck.position.y = 1.2; deck.castShadow = true; deck.receiveShadow = true; br.add(deck);
-      for (const sx of [-10.2, 10.2]) {
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.4, 30), matR);
-        rail.position.set(sx, 2.4, 0); br.add(rail);
-        for (let i = -4; i <= 4; i++) {
-          const post = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.6, 0.5), matR);
-          post.position.set(sx, 2.4, i * 3.5); br.add(post);
+    // Puentes
+    const matDeck = new THREE.MeshLambertMaterial({ color: 0x3a3a3a });   // asfalto
+    const matRieles = new THREE.MeshLambertMaterial({ color: 0x8a8a8a });
+    const matPilar = new THREE.MeshLambertMaterial({ color: 0x6a6a5a });
+    const matMarca = new THREE.MeshBasicMaterial({ color: 0xdddddd });
+
+    for (const bz of BRIDGES_X) {
+      const centerX = (bz.xMin + bz.xMax) / 2;
+      const width = bz.xMax - bz.xMin;
+      const br = new THREE.Group();
+      br.position.set(centerX, 0, RIVER.centerZ);
+
+      // Deck al ras de la carretera (y=0.15 como las carreteras base)
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(width, 0.3, 32), matDeck);
+      deck.position.y = 0.15;
+      deck.receiveShadow = true;
+      br.add(deck);
+
+      // Borde superior oscuro (línea de carretera)
+      const edgeL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 32), matRieles);
+      edgeL.position.set(-width / 2 + 0.3, 0.32, 0); br.add(edgeL);
+      const edgeR = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 32), matRieles);
+      edgeR.position.set(width / 2 - 0.3, 0.32, 0); br.add(edgeR);
+
+      // Marcas centrales dashed (alineadas con la carretera)
+      for (let i = -2; i <= 2; i++) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 3), matMarca);
+        m.rotation.x = -Math.PI / 2;
+        m.position.set(0, 0.33, i * 5);
+        br.add(m);
+      }
+
+      // Barandas laterales (bajas, estilo quitamiedos)
+      for (const sx of [-width / 2, width / 2]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.0, 32), matRieles);
+        rail.position.set(sx, 0.8, 0);
+        br.add(rail);
+        // Postes cada 4m
+        for (let i = -3; i <= 3; i++) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.3, 0.4), matRieles);
+          post.position.set(sx, 0.85, i * 4.5);
+          br.add(post);
         }
       }
+
+      // Pilares (3 pares) en el agua
       for (const pz of [-10, 0, 10]) {
-        const py = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.9, 4, 8), matP);
-        py.position.set(0, -0.8, pz); br.add(py);
+        for (const px of [-width / 2 + 1.5, width / 2 - 1.5]) {
+          const pilar = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.1, 5, 8), matPilar);
+          pilar.position.set(px, -2.4, pz);
+          pilar.castShadow = true;
+          br.add(pilar);
+        }
       }
-      for (const sx of [-5, 5]) {
-        const arc = new THREE.Mesh(new THREE.TorusGeometry(4, 0.4, 6, 10, Math.PI), matR);
-        arc.rotation.y = Math.PI / 2; arc.position.set(sx, 1.5, 0); br.add(arc);
-      }
+
       API.scene.add(br);
+    }
+    console.log('🌉 Puentes: 3 construidos');
+  }
+
+  // ===================== ÁRBOL DESTRUCTIBLE =====================
+  function addTree(x, z) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2.5, 6),
+      new THREE.MeshLambertMaterial({ color: 0x594630 }));
+    trunk.position.y = 1.25; trunk.castShadow = true;
+    g.add(trunk);
+    const leafMat = new THREE.MeshLambertMaterial({
+      color: Math.random() < 0.5 ? 0x2f5f33 : 0x3a7038,
+    });
+    const leaves = new THREE.Mesh(new THREE.ConeGeometry(rnd(1.8, 2.4), rnd(4, 6), 7), leafMat);
+    leaves.position.y = 4.5; leaves.castShadow = true;
+    g.add(leaves);
+    API.scene.add(g);
+
+    const tree = {
+      mesh: g, trunk, leaves,
+      hp: 40, maxHp: 40,
+      state: 'alive',  // alive | falling | dead
+      fallT: 0, fallDir: rnd(0, Math.PI * 2),
+      respawnT: 0,
+      radius: 1.8,
+    };
+    mod.trees.push(tree);
+    return tree;
+  }
+  function destroyTree(tree) {
+    if (tree.state !== 'alive') return;
+    tree.state = 'falling';
+    tree.fallT = 0;
+    spawnDust(V(tree.mesh.position.x, 2, tree.mesh.position.z));
+    API.playSound('explosion');
+  }
+  function updateTrees(dt) {
+    for (const t of mod.trees) {
+      if (t.state === 'falling') {
+        t.fallT += dt;
+        const k = Math.min(1, t.fallT / 1.2);
+        // Caer girando
+        t.mesh.rotation.z = Math.sin(k * Math.PI / 2) * (Math.PI / 2);
+        t.mesh.rotation.y = t.fallDir;
+        t.mesh.position.y = -Math.sin(k * Math.PI) * 0.5;
+        if (k >= 1) {
+          t.state = 'dead';
+          t.respawnT = 0;
+        }
+      } else if (t.state === 'dead') {
+        t.respawnT += dt;
+        // Desvanecer (reducir escala)
+        const s = Math.max(0, 1 - t.respawnT / 3);
+        t.mesh.scale.setScalar(s);
+        if (t.respawnT > 3) { t.mesh.visible = false; }
+        if (t.respawnT > 45) {
+          // Respawn
+          t.state = 'alive';
+          t.hp = t.maxHp;
+          t.mesh.visible = true;
+          t.mesh.rotation.set(0, 0, 0);
+          t.mesh.position.y = 0;
+          t.mesh.scale.setScalar(1);
+        }
+      }
     }
   }
 
-  // ===================== BOSQUE + COLINAS + ROCAS =====================
-  function addForestAndHills() {
-    const matT = new THREE.MeshLambertMaterial({ color: 0x594630 });
-    const matL1 = new THREE.MeshLambertMaterial({ color: 0x2f5f33 });
-    const matL2 = new THREE.MeshLambertMaterial({ color: 0x3a7038 });
-    const matH = new THREE.MeshLambertMaterial({ color: 0x5b7a3e });
-    const matR = new THREE.MeshLambertMaterial({ color: 0x7a7060 });
+  // ===================== EDIFICIO 2 PISOS DESTRUCTIBLE =====================
+  function addBuilding(x, z, colorHue) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
 
-    // Bosques en las 4 esquinas del mapa base (dentro de 400x400)
-    for (const center of [[-140, -100], [140, -100], [-140, 100], [140, 100]]) {
-      for (let i = 0; i < 30; i++) {
-        const x = center[0] + rnd(-40, 40), z = center[1] + rnd(-40, 40);
-        const t = new THREE.Group(); t.position.set(x, 0, z);
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2.5, 6), matT);
-        trunk.position.y = 1.25; trunk.castShadow = true; t.add(trunk);
-        const leaves = new THREE.Mesh(new THREE.ConeGeometry(rnd(1.8, 2.6), rnd(4, 6.5), 7), i % 2 ? matL1 : matL2);
-        leaves.position.y = 4.5; leaves.castShadow = true; t.add(leaves);
-        API.scene.add(t);
+    const matBase = new THREE.MeshLambertMaterial({ color: colorHue || 0xd8d2c4 });
+    const matAccent = new THREE.MeshLambertMaterial({ color: 0x8a4a3a });
+    const matWindow = new THREE.MeshBasicMaterial({ color: 0x2a4a6a });
+    const matDoor = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
+    const matSlab = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
+    const matRoof = new THREE.MeshLambertMaterial({ color: 0x7a3a2a });
+
+    const W = 8, H_floor = 4, D = 8, T = 0.5;
+
+    // ================ PLANTA BAJA (grupo) ================
+    const groundFloor = new THREE.Group();
+    g.add(groundFloor);
+
+    const groundWalls = [];
+    // Paredes: [w, h, d, x, y, z]
+    const wallDefs = [
+      [W, H_floor, T,   0, H_floor/2, -D/2],  // atrás
+      [W, H_floor, T,   0, H_floor/2,  D/2],  // frente
+      [T, H_floor, D, -W/2, H_floor/2, 0],    // izq
+      [T, H_floor, D,  W/2, H_floor/2, 0],    // der
+    ];
+    for (let i = 0; i < wallDefs.length; i++) {
+      const [w, h, d, wx, wy, wz] = wallDefs[i];
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matBase);
+      wall.position.set(wx, wy, wz);
+      wall.castShadow = true; wall.receiveShadow = true;
+      groundFloor.add(wall);
+      groundWalls.push({ mesh: wall, hp: 100, maxHp: 100, size: [w, h, d], pos: [wx, wy, wz] });
+    }
+
+    // Ventanas planta baja (2 por pared frontal, trasera)
+    for (const wall of ['front', 'back']) {
+      const zPos = wall === 'front' ? D/2 + 0.01 : -D/2 - 0.01;
+      for (const wx of [-2, 2]) {
+        const win = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.5), matWindow);
+        win.position.set(wx, 2.2, zPos);
+        if (wall === 'back') win.rotation.y = Math.PI;
+        groundFloor.add(win);
       }
     }
+    // Puerta frontal
+    const door = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 2.8), matDoor);
+    door.position.set(0, 1.4, D/2 + 0.01);
+    groundFloor.add(door);
 
-    // Bosque adicional en el anillo extendido (entre radio 220 y 380)
-    for (let i = 0; i < 120; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const rad = rnd(220, 380);
-      const x = Math.cos(a) * rad, z = Math.sin(a) * rad;
-      // Evitar aeropuertos y bases
-      if (Math.abs(x) < 150 && Math.abs(z) < 300) continue;
-      const t = new THREE.Group(); t.position.set(x, 0, z);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2.5, 6), matT);
-      trunk.position.y = 1.25; t.add(trunk);
-      const leaves = new THREE.Mesh(new THREE.ConeGeometry(rnd(1.8, 2.6), rnd(4, 6.5), 7), i % 2 ? matL1 : matL2);
-      leaves.position.y = 4.5; t.add(leaves);
-      API.scene.add(t);
+    // ================ LOSA INTERMEDIA ================
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.4, 0.3, D + 0.4), matSlab);
+    slab.position.y = H_floor + 0.15;
+    slab.castShadow = true; slab.receiveShadow = true;
+    g.add(slab);
+
+    // ================ PLANTA ALTA (grupo que cae) ================
+    const upperFloor = new THREE.Group();
+    upperFloor.position.y = H_floor;  // relativa a la losa
+    g.add(upperFloor);
+
+    const upperWalls = [];
+    for (const [w, h, d, wx, wy, wz] of wallDefs) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.9, d), matAccent);
+      wall.position.set(wx, wy, wz);
+      wall.castShadow = true; wall.receiveShadow = true;
+      upperFloor.add(wall);
+      upperWalls.push({ mesh: wall, hp: 80, maxHp: 80 });
+    }
+    // Ventanas planta alta
+    for (const wx of [-2.5, 0, 2.5]) {
+      const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), matWindow);
+      win.position.set(wx, 2.2, D/2 + 0.01);
+      upperFloor.add(win);
+    }
+    // Techo
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.5, D + 1), matRoof);
+    roof.position.y = H_floor * 0.9 + 0.25;
+    roof.castShadow = true;
+    upperFloor.add(roof);
+
+    API.scene.add(g);
+
+    // Colisión: añadir el footprint al array houses del base para que bloquee movimiento
+    if (window.houses && Array.isArray(window.houses)) {
+      window.houses.push({
+        pos: null,
+        min: V(x - W/2, 0, z - D/2),
+        max: V(x + W/2, H_floor * 2, z + D/2),
+      });
     }
 
-    // Colinas en el anillo externo
-    for (let i = 0; i < 20; i++) {
-      const a = (i / 20) * Math.PI * 2 + rnd(-0.1, 0.1), rad = 230 + rnd(-30, 30);
-      const hill = new THREE.Mesh(new THREE.SphereGeometry(rnd(18, 30), 12, 8), matH);
-      hill.scale.y = 0.22;
-      hill.position.set(Math.cos(a) * rad, -1, Math.sin(a) * rad);
-      hill.receiveShadow = true; API.scene.add(hill);
-    }
+    const b = {
+      mesh: g, groundFloor, upperFloor,
+      groundWalls, upperWalls,
+      hp: 400, maxHp: 400,
+      state: 'intact',  // intact | collapsing | destroyed
+      collapseT: 0,
+      x, z, W, D,
+      radius: Math.max(W, D) / 2 + 0.5,
+    };
+    mod.buildings.push(b);
+    return b;
+  }
 
-    // Rocas dispersas
-    for (let i = 0; i < 40; i++) {
-      const a = Math.random() * Math.PI * 2, rad = rnd(200, 400);
-      const r = new THREE.Mesh(new THREE.DodecahedronGeometry(rnd(1.5, 3.5), 0), matR);
-      r.position.set(Math.cos(a) * rad, 0.5, Math.sin(a) * rad);
-      r.rotation.set(rnd(0,3), rnd(0,3), rnd(0,3));
-      r.castShadow = true;
-      API.scene.add(r);
+  function damageWall(b, wall, dmg) {
+    if (wall.hp <= 0) return;
+    wall.hp -= dmg;
+    if (wall.hp <= 0) {
+      wall.mesh.visible = false;
+      spawnDust(wall.mesh.position);
+      // ¿Todas las paredes de planta baja destruidas?
+      if (b.groundWalls.every(w => w.hp <= 0)) triggerCollapse(b);
     }
+  }
+  function triggerCollapse(b) {
+    if (b.state !== 'intact') return;
+    b.state = 'collapsing';
+    b.collapseT = 0;
+    API.playSound('explosion');
+    shakeAmount = Math.max(shakeAmount, 2.5);
+  }
+  function updateBuildings(dt) {
+    for (const b of mod.buildings) {
+      if (b.state === 'collapsing') {
+        b.collapseT += dt;
+        const k = Math.min(1, b.collapseT / 1.8);
+        // La planta alta cae con aceleración
+        const fall = k * k * 3.2;
+        b.upperFloor.position.y = 4 - fall;
+        b.upperFloor.rotation.z = Math.sin(k * Math.PI) * 0.15;
+        if (k > 0.5 && Math.random() < 0.3) {
+          spawnDust(V(b.x + rnd(-3, 3), 2, b.z + rnd(-3, 3)));
+        }
+        if (k >= 1) {
+          // Escombros finales
+          b.state = 'destroyed';
+          spawnSmokePlume(V(b.x, 1, b.z));
+          shakeAmount = Math.max(shakeAmount, 3);
+          // Ocultar todo
+          b.upperFloor.visible = false;
+          b.groundFloor.visible = false;
+          // Añadir escombros (montón)
+          const rubbleMat = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
+          for (let i = 0; i < 12; i++) {
+            const r = new THREE.Mesh(new THREE.BoxGeometry(rnd(0.5, 1.5), rnd(0.3, 0.8), rnd(0.5, 1.5)), rubbleMat);
+            r.position.set(b.x + rnd(-3, 3), rnd(0.2, 1.2), b.z + rnd(-3, 3));
+            r.rotation.set(rnd(0, 3), rnd(0, 3), rnd(0, 3));
+            API.scene.add(r);
+          }
+          // Quitar de la colisión
+          if (window.houses && Array.isArray(window.houses)) {
+            const idx = window.houses.findIndex(h => h && h.min && Math.abs(h.min.x - (b.x - b.W/2)) < 0.5 && Math.abs(h.min.z - (b.z - b.D/2)) < 0.5);
+            if (idx >= 0) window.houses.splice(idx, 1);
+          }
+        }
+      }
+    }
+  }
+
+  // ===================== COLISIÓN DE AGUA =====================
+  function inWater(x, z) {
+    if (z < RIVER.zMin || z > RIVER.zMax) return false;
+    for (const b of BRIDGES_X) {
+      if (x >= b.xMin && x <= b.xMax) return false;
+    }
+    return true;
+  }
+
+  function patchWaterCollision() {
+    if (typeof window.isColliding !== 'function') {
+      console.warn('⚠️ No se pudo parchear isColliding (función no encontrada)');
+      return;
+    }
+    const _orig = window.isColliding;
+    window.isColliding = function (pos, radius) {
+      // Bloqueo por agua
+      if (inWater(pos.x, pos.z)) return true;
+      return _orig(pos, radius);
+    };
+    console.log('💧 Colisión de agua activada');
   }
 
   // ===================== ZONA INDUSTRIAL =====================
@@ -291,7 +548,6 @@
     const matRoof  = new THREE.MeshLambertMaterial({ color: 0x4a4a4a });
     const matStack = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
     const matRed   = new THREE.MeshLambertMaterial({ color: 0xaa2222 });
-    // Mover las fábricas fuera de las carreteras base (x=±180, z=±120)
     for (const base of [[-180, -120], [180, -120], [-180, 120], [180, 120]]) {
       const bx = base[0], bz = base[1];
       const nave = new THREE.Mesh(new THREE.BoxGeometry(22, 8, 14), matBrick);
@@ -303,12 +559,10 @@
         new THREE.MeshLambertMaterial({ color: 0xcccccc, transparent: true, opacity: 0.55, depthWrite: false }));
       smoke.position.set(bx + 8, 21, bz - 4); API.scene.add(smoke);
       mod.smokes.push({ mesh: smoke, baseY: 21, t: Math.random() * 6 });
-      const chim2 = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.5, 14, 8), matStack); chim2.position.set(bx - 7, 7, bz + 3); chim2.castShadow = true; API.scene.add(chim2);
-      const alm = new THREE.Mesh(new THREE.BoxGeometry(8, 4, 8), matConc); alm.position.set(bx - 12, 2, bz - 6); API.scene.add(alm);
     }
   }
 
-  // ===================== POSTES DE LUZ (carreteras base) =====================
+  // ===================== POSTES DE LUZ =====================
   function addStreetLights() {
     const matPost = new THREE.MeshLambertMaterial({ color: 0x333333 });
     const matLamp = new THREE.MeshBasicMaterial({ color: 0xfff2b0 });
@@ -324,7 +578,7 @@
     }
   }
 
-  // ===================== CUARTEL HQ =====================
+  // ===================== HQ =====================
   function buildHQ(team, x, z) {
     const color = team === 'ally' ? 0x0055ff : 0xff2222;
     const mat = new THREE.MeshLambertMaterial({ color });
@@ -336,10 +590,8 @@
       o.position.set(xx, yy, zz); o.castShadow = true; o.receiveShadow = true; g.add(o); return o;
     };
     add(26, 0.5, 26, matConc, 0, 0.25, 0);
-    add(26, 3.5, 0.9, mat, 0, 2, -12.5);
-    add(26, 3.5, 0.9, mat, 0, 2, 12.5);
-    add(0.9, 3.5, 26, mat, -12.5, 2, 0);
-    add(0.9, 3.5, 26, mat, 12.5, 2, 0);
+    add(26, 3.5, 0.9, mat, 0, 2, -12.5); add(26, 3.5, 0.9, mat, 0, 2, 12.5);
+    add(0.9, 3.5, 26, mat, -12.5, 2, 0); add(0.9, 3.5, 26, mat, 12.5, 2, 0);
     for (const [cx, cz] of [[-12,-12],[12,-12],[-12,12],[12,12]]) {
       add(3.2, 6, 3.2, matDark, cx, 3, cz);
       const c = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 4.5, 10), new THREE.MeshLambertMaterial({ color: 0x111111 }));
@@ -347,10 +599,6 @@
     }
     add(9, 9, 9, matConc, 0, 4.5, 0);
     add(9.6, 0.6, 9.6, mat, 0, 9.3, 0);
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2;
-      add(0.5, 9.5, 0.5, matDark, Math.cos(a) * 4.4, 4.75, Math.sin(a) * 4.4);
-    }
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 7, 8), matDark);
     mast.position.set(0, 13, 0); g.add(mast);
     const rg = new THREE.Group(); rg.position.set(0, 15.5, 0);
@@ -383,7 +631,6 @@
       o.position.set(xx, yy, zz); o.castShadow = true; o.receiveShadow = true; g.add(o); return o;
     };
 
-    // Pista
     const runway = new THREE.Mesh(new THREE.PlaneGeometry(20, 130), matAsphalt);
     runway.rotation.x = -Math.PI / 2; runway.position.set(0, 0.02, 0); runway.receiveShadow = true; g.add(runway);
     for (let i = -10; i <= 10; i++) {
@@ -402,14 +649,6 @@
         l.position.set(xx, 0.18, i * 6); g.add(l);
       }
     }
-    for (let i = 1; i <= 5; i++) {
-      for (const xx of [-3, -1.5, 0, 1.5, 3]) {
-        const l = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6), matWhite);
-        l.position.set(xx, 0.18, -62 - i * 2); g.add(l);
-      }
-    }
-
-    // Taxiway
     const taxi = new THREE.Mesh(new THREE.PlaneGeometry(6, 120), matAsphalt);
     taxi.rotation.x = -Math.PI / 2; taxi.position.set(18, 0.025, 0); g.add(taxi);
     for (const tz of [-40, -15, 15, 40]) {
@@ -421,7 +660,6 @@
     const yl = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 118), matYellow);
     yl.rotation.x = -Math.PI / 2; yl.position.set(18, 0.05, 0); g.add(yl);
 
-    // Hangares
     for (const hx of [-38, 38]) {
       const hz = 6;
       add(22, 0.5, 22, matConcrete, hx, 0.25, hz);
@@ -433,26 +671,13 @@
         const r = new THREE.Mesh(new THREE.BoxGeometry(22 - i * 4, 0.4, 22), matMetal);
         r.position.set(hx, 7.5 + i * 0.9, hz); g.add(r);
       }
-      add(2, 2, 0.2, matYellow, hx - 8, 5.5, hz + 11.2);
     }
 
-    // Terminal
     const tx = 0, tz2 = -75;
     add(30, 8, 14, matConcrete, tx, 4, tz2);
     add(28, 5, 0.3, matGlass, tx, 4.5, tz2 + 7.1);
     add(28, 0.6, 12, matMetal, tx, 8.2, tz2);
-    for (let i = 0; i < 15; i++) add(0.2, 1.2, 0.2, matMetal, tx - 14 + i * 2, 9.1, tz2 + 6);
-    for (const px of [-10, 0, 10]) {
-      add(3, 0.5, 8, matConcrete, tx + px, 5, tz2 + 12);
-      add(3, 0.3, 8, matMetal, tx + px, 7.5, tz2 + 12);
-      add(3, 2.2, 0.15, matGlass, tx + px, 6, tz2 + 16);
-      add(0.3, 5, 0.3, matMetal, tx + px - 1.3, 2.5, tz2 + 8.2);
-      add(0.3, 5, 0.3, matMetal, tx + px + 1.3, 2.5, tz2 + 8.2);
-      add(0.3, 5, 0.3, matMetal, tx + px - 1.3, 2.5, tz2 + 15.8);
-      add(0.3, 5, 0.3, matMetal, tx + px + 1.3, 2.5, tz2 + 15.8);
-    }
 
-    // Torre de control
     const tx2 = -55, tz3 = -55;
     add(8, 22, 8, matConcrete, tx2, 11, tz3);
     add(11, 5, 11, matGlass, tx2, 24, tz3);
@@ -461,12 +686,7 @@
     ant.position.set(tx2, 31.4, tz3); g.add(ant);
     const rg = new THREE.Group(); rg.position.set(tx2, 33, tz3);
     const radar = new THREE.Mesh(new THREE.BoxGeometry(4, 0.2, 1.2), matMetal); rg.add(radar); g.add(rg);
-    for (const [dx, dz] of [[-5,-5],[5,-5],[-5,5],[5,5]]) {
-      const l = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 6), matRed);
-      l.position.set(tx2 + dx, 28, tz3 + dz); g.add(l);
-    }
 
-    // Combustible
     for (let i = 0; i < 4; i++) {
       const tk = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 6, 18), matMetal);
       tk.position.set(-45 + i * 8, 3, 30); tk.castShadow = true; g.add(tk);
@@ -476,56 +696,35 @@
       bd.position.set(-45 + i * 8, 4, 30); g.add(bd);
     }
 
-    // Helipuerto
     const hpX = 45, hpZ = 30;
     const hp = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.4, 24), matConcrete);
     hp.position.set(hpX, 0.2, hpZ); hp.receiveShadow = true; g.add(hp);
     const hpC = new THREE.Mesh(new THREE.RingGeometry(6, 6.5, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
     hpC.rotation.x = -Math.PI / 2; hpC.position.set(hpX, 0.42, hpZ); g.add(hpC);
-    const hcv = document.createElement('canvas'); hcv.width = 128; hcv.height = 128;
-    const hc = hcv.getContext('2d');
-    hc.fillStyle = '#ffffff'; hc.font = 'bold 110px sans-serif';
-    hc.textAlign = 'center'; hc.textBaseline = 'middle'; hc.fillText('H', 64, 64);
-    const hT = new THREE.CanvasTexture(hcv);
-    const hM = new THREE.Mesh(new THREE.PlaneGeometry(5, 5), new THREE.MeshBasicMaterial({ map: hT, transparent: true }));
-    hM.rotation.x = -Math.PI / 2; hM.position.set(hpX, 0.43, hpZ); g.add(hM);
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      const l = new THREE.Mesh(new THREE.SphereGeometry(0.25, 6, 6), matGreen);
-      l.position.set(hpX + Math.cos(a) * 7.5, 0.5, hpZ + Math.sin(a) * 7.5); g.add(l);
-    }
-
-    // Torre de agua
-    const wtx = 60, wtz = -30;
-    for (const [ox, oz] of [[-2,-2],[2,-2],[-2,2],[2,2]]) add(0.4, 12, 0.4, matMetal, wtx + ox, 6, wtz + oz);
-    const wt = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.5, 4, 14), matConcrete);
-    wt.position.set(wtx, 13, wtz); g.add(wt);
-    const wtop = new THREE.Mesh(new THREE.ConeGeometry(3.8, 1.2, 14), matMetal);
-    wtop.position.set(wtx, 15.6, wtz); g.add(wtop);
 
     return { team, mesh: g, x, z, rotY, radarPivot: rg };
   }
 
-  // ===================== RUNWAYS (posiciones NUEVAS) =====================
+  // ===================== RUNWAYS =====================
   const runways = {
     ally: {
       takeoffStart: V(-60, GROUND_Y, -265),
       takeoffEnd:   V(-60, GROUND_Y, -135),
       takeoffDir:   V(0, 0, 1),
       takeoffHeading: 0,
-      approach:     V(-60, CRUISE_ALT, -135 + APPROACH_DIST),   // (-60, 32, 35)
+      approach:     V(-60, CRUISE_ALT, -135 + APPROACH_DIST),
       threshold:    V(-60, GROUND_Y, -135),
       landingDir:   V(0, 0, -1),
       landingHeading: Math.PI,
       rolloutEnd:   V(-60, GROUND_Y, -265),
-      apronBase:    V(-42, GROUND_Y, -150),   // taxiway norte, más cerca del takeoff
+      apronBase:    V(-42, GROUND_Y, -150),
     },
     enemy: {
       takeoffStart: V(60, GROUND_Y, 265),
       takeoffEnd:   V(60, GROUND_Y, 135),
       takeoffDir:   V(0, 0, -1),
       takeoffHeading: Math.PI,
-      approach:     V(60, CRUISE_ALT, 135 - APPROACH_DIST),     // (60, 32, -35)
+      approach:     V(60, CRUISE_ALT, 135 - APPROACH_DIST),
       threshold:    V(60, GROUND_Y, 135),
       landingDir:   V(0, 0, 1),
       landingHeading: 0,
@@ -556,19 +755,8 @@
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.8, 10), matTip);
     tip.rotation.x = Math.PI / 2; tip.position.set(0, 0, 7.2); g.add(tip);
     add(new THREE.BoxGeometry(0.95, 0.75, 2.8), matGlass, 0, 0.9, -0.8);
-    add(new THREE.BoxGeometry(0.95, 0.45, 1.5), matGlass, 0, 0.98, 1.4);
     const wl = add(new THREE.BoxGeometry(4.2, 0.32, 2.8), matBody, -2.6, 0, 0.6); wl.rotation.z = 0.14;
     const wr = add(new THREE.BoxGeometry(4.2, 0.32, 2.8), matBody, 2.6, 0, 0.6); wr.rotation.z = -0.14;
-    add(new THREE.BoxGeometry(0.85, 0.45, 1.4), matDark, -4.6, 0.2, 1.0);
-    add(new THREE.BoxGeometry(0.85, 0.45, 1.4), matDark, 4.6, 0.2, 1.0);
-    for (const wx of [-3.0, 3.0]) {
-      for (const wz of [0.2, 1.4]) {
-        const msl = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 2.8, 8), matMetal);
-        msl.rotation.x = Math.PI / 2; msl.position.set(wx, -0.45, wz); g.add(msl);
-        const t = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 8), matDark);
-        t.rotation.x = Math.PI / 2; t.position.set(wx, -0.45, wz + 1.65); g.add(t);
-      }
-    }
     const tv = add(new THREE.BoxGeometry(0.32, 2.6, 2), matBody, 0, 1.5, -4.5); tv.rotation.x = -0.25;
     add(new THREE.BoxGeometry(3.8, 0.28, 1.3), matBody, 0, 0, -4.8);
     for (const ex of [-0.7, 0.7]) {
@@ -584,13 +772,9 @@
     }
     API.scene.add(g);
 
-    // Apron: a lo largo del taxiway, separado por slot en Z
     const apron = rw.apronBase.clone();
     apron.z += (slot - 1) * 10;
-
-    // Yaw inicial: mirando hacia el takeoffStart
-    const dx = rw.takeoffStart.x - apron.x;
-    const dz = rw.takeoffStart.z - apron.z;
+    const dx = rw.takeoffStart.x - apron.x, dz = rw.takeoffStart.z - apron.z;
     const yaw0 = yawFromDir(dx, dz);
 
     const unit = {
@@ -602,8 +786,7 @@
       flames, yaw: yaw0, pitch: 0, roll: 0,
       state: 'parked',
       stateT: 4 + slot * 3 + rnd(0, 3),
-      rollSpeed: 0,
-      groundTime: 0,
+      rollSpeed: 0, groundTime: 0,
       rw, apron,
       patrolAngle: Math.random() * Math.PI * 2,
       patrolRadius: rnd(70, 130),
@@ -617,7 +800,7 @@
     return unit;
   }
 
-  // ===================== HELICÓPTERO =====================
+  // ===================== HELI =====================
   function buildAttackHeli(color, team, x, z) {
     const matBody  = new THREE.MeshLambertMaterial({ color });
     const matDark  = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
@@ -657,10 +840,6 @@
     }
     g.add(rM);
     add(new THREE.BoxGeometry(6, 0.22, 0.9), matBody, 0, -0.2, 0.6);
-    for (const wx of [-2.4, -1.6, 1.6, 2.4]) {
-      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 1.7, 8), matDark);
-      p.rotation.x = Math.PI / 2; p.position.set(wx, -0.65, 0.9); g.add(p);
-    }
     const turret = new THREE.Group();
     const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 1.4, 8), matDark);
     cannon.rotation.x = Math.PI / 2; cannon.position.set(0, 0, 0.5); turret.add(cannon);
@@ -690,10 +869,31 @@
   extendWorld();
   addClouds();
   addDistantMountains();
-  addRiver();
-  addForestAndHills();
+  addRiverAndBridges();
+  patchWaterCollision();
   addIndustrialZone();
   addStreetLights();
+
+  // Árboles destructibles (fuera de carreteras, aeropuertos, HQ)
+  const treeZones = [[-150,-100],[150,-100],[-150,100],[150,100],[-200,-30],[200,-30],[-200,30],[200,30]];
+  for (const [cx, cz] of treeZones) {
+    for (let i = 0; i < 8; i++) {
+      const x = cx + rnd(-25, 25), z = cz + rnd(-25, 25);
+      if (Math.abs(x) < 30 && Math.abs(z) < 30) continue;   // no centro
+      if (z > 30 && z < 80) continue;                        // no río
+      addTree(x, z);
+    }
+  }
+
+  // Edificios 2 pisos destructibles (bien separados)
+  addBuilding(-120, -50, 0xd8d2c4);
+  addBuilding(-120, 100, 0xc8b8a0);
+  addBuilding( 120, -50, 0xd8d2c4);
+  addBuilding( 120, 100, 0xb8c8d0);
+  addBuilding(-40, -30, 0xd8d2c4);
+  addBuilding( 40, -30, 0xb8c8d0);
+  addBuilding(-40, 140, 0xc8b8a0);
+  addBuilding( 40, 140, 0xd8d2c4);
 
   buildHQ('ally',  ALLY_HQ_POS.x,  ALLY_HQ_POS.z);
   buildHQ('enemy', ENEMY_HQ_POS.x, ENEMY_HQ_POS.z);
@@ -714,56 +914,37 @@
   const _p = new THREE.Vector3();
 
   function resetPlane(p, delay) {
-    p.state = 'parked';
-    p.stateT = delay || 5;
-    p.rollSpeed = 0;
-    p.groundTime = 0;
-    p.mesh.position.copy(p.apron);
-    p.mesh.position.y = GROUND_Y;
-    const dx = p.rw.takeoffStart.x - p.apron.x;
-    const dz = p.rw.takeoffStart.z - p.apron.z;
+    p.state = 'parked'; p.stateT = delay || 5;
+    p.rollSpeed = 0; p.groundTime = 0;
+    p.mesh.position.copy(p.apron); p.mesh.position.y = GROUND_Y;
+    const dx = p.rw.takeoffStart.x - p.apron.x, dz = p.rw.takeoffStart.z - p.apron.z;
     p.yaw = yawFromDir(dx, dz);
     p.mesh.rotation.set(0, p.yaw, 0);
   }
 
   function updatePlane(p, dt) {
     if (p.isDead) {
-      p.respawnTimer += dt;
-      p.mesh.visible = false;
+      p.respawnTimer += dt; p.mesh.visible = false;
       if (p.hpGroup) p.hpGroup.visible = false;
       if (p.respawnTimer > 15) {
         p.hp = p.maxHp; p.isDead = false;
-        p.mesh.visible = true;
-        if (p.hpGroup) p.hpGroup.visible = true;
-        resetPlane(p, 8);
-        p.respawnTimer = 0;
+        p.mesh.visible = true; if (p.hpGroup) p.hpGroup.visible = true;
+        resetPlane(p, 8); p.respawnTimer = 0;
       }
       return;
     }
+    p.cooldown -= dt; p.missileCooldown -= dt;
 
-    p.cooldown -= dt;
-    p.missileCooldown -= dt;
-
-    // Failsafe A: fuera de límites
-    if (Math.abs(p.mesh.position.x) > WORLD_SIZE * 0.55 ||
-        Math.abs(p.mesh.position.z) > WORLD_SIZE * 0.55) {
-      console.warn(`⚠️ Caza ${p.team} fuera de límites`);
-      resetPlane(p, 5);
-      return;
+    if (Math.abs(p.mesh.position.x) > WORLD_SIZE * 0.55 || Math.abs(p.mesh.position.z) > WORLD_SIZE * 0.55) {
+      resetPlane(p, 5); return;
     }
-    // Failsafe B: atascado en suelo sin moverse
     const onGround = p.mesh.position.y < 3;
     const okGround = (p.state === 'parked' || p.state === 'taxi_out' || p.state === 'taxi_in' ||
                       p.state === 'takeoff' || p.state === 'rollout');
     if (onGround && !okGround) p.groundTime += dt; else p.groundTime = 0;
-    if (p.groundTime > 15) {
-      console.warn(`⚠️ Caza ${p.team} atascado en suelo`);
-      resetPlane(p, 5);
-      return;
-    }
+    if (p.groundTime > 15) { resetPlane(p, 5); return; }
 
     switch (p.state) {
-
       case 'parked': {
         p.stateT -= dt;
         stepToward(p.mesh.position, p.apron, TAXI_SPEED * dt);
@@ -772,32 +953,21 @@
           const dx = p.rw.takeoffStart.x - p.mesh.position.x;
           const dz = p.rw.takeoffStart.z - p.mesh.position.z;
           p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 2);
-          p.mesh.rotation.set(0, p.yaw, 0);
           p.state = 'taxi_out';
-        } else {
-          // Solo rota al objetivo, sin avanzar
-          p.mesh.rotation.set(0, p.yaw, 0);
         }
+        p.mesh.rotation.set(0, p.yaw, 0);
         return;
       }
-
       case 'taxi_out': {
         const target = p.rw.takeoffStart.clone(); target.y = GROUND_Y;
         stepToward(p.mesh.position, target, TAXI_SPEED * dt);
-        const dx = target.x - p.mesh.position.x;
-        const dz = target.z - p.mesh.position.z;
-        if (Math.abs(dx) + Math.abs(dz) > 0.5) {
-          p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
-        }
+        const dx = target.x - p.mesh.position.x, dz = target.z - p.mesh.position.z;
+        if (Math.abs(dx) + Math.abs(dz) > 0.5) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
         p.mesh.position.y = GROUND_Y;
         p.mesh.rotation.set(0, p.yaw, 0);
-        if (p.mesh.position.distanceTo(target) < 3) {
-          p.state = 'takeoff';
-          p.rollSpeed = 0;
-        }
+        if (p.mesh.position.distanceTo(target) < 3) { p.state = 'takeoff'; p.rollSpeed = 0; }
         return;
       }
-
       case 'takeoff': {
         p.rollSpeed = Math.min(ROLL_SPEED, p.rollSpeed + 45 * dt);
         p.mesh.position.addScaledVector(p.rw.takeoffDir, p.rollSpeed * dt);
@@ -805,14 +975,11 @@
         p.yaw = rotateSmooth(p.yaw, p.rw.takeoffHeading, dt, 4);
         p.mesh.rotation.set(0, p.yaw, 0);
         for (const f of p.flames) f.visible = true;
-        if (p.mesh.position.distanceTo(p.rw.takeoffStart) > 125) {
-          p.state = 'climb'; p.climbT = 0;
-        }
+        if (p.mesh.position.distanceTo(p.rw.takeoffStart) > 125) { p.state = 'climb'; p.climbT = 0; }
         return;
       }
-
       case 'climb': {
-        p.climbT = (p.climbT || 0) + dt;
+        p.climbT += dt;
         const k = Math.min(1, p.climbT / 2.5);
         p.mesh.position.addScaledVector(p.rw.takeoffDir, CRUISE_SPEED * dt);
         p.mesh.position.y = GROUND_Y + k * (CRUISE_ALT - GROUND_Y);
@@ -821,47 +988,36 @@
         if (k >= 1) { p.state = 'combat'; p.combatTime = 0; p.mesh.rotation.set(0, p.yaw, 0); }
         return;
       }
-
       case 'combat': {
         p.combatTime += dt;
         runCombat(p, dt);
         if (p.combatTime > 40 || p.hp < 35) p.state = 'return';
         return;
       }
-
       case 'return': {
         const wp = p.rw.approach.clone(); wp.y = CRUISE_ALT;
         const r = stepToward(p.mesh.position, wp, CRUISE_SPEED * dt);
-        const dx = wp.x - p.mesh.position.x;
-        const dz = wp.z - p.mesh.position.z;
+        const dx = wp.x - p.mesh.position.x, dz = wp.z - p.mesh.position.z;
         if (Math.abs(dx) + Math.abs(dz) > 1) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
         p.mesh.rotation.set(0, p.yaw, 0);
         p.mesh.position.y = CRUISE_ALT;
         for (const f of p.flames) f.visible = true;
-        if (r.distance < 5) {
-          p.state = 'approach';
-          p.approachStart = p.mesh.position.clone();
-          p.approachT = 0;
-        }
+        if (r.distance < 5) { p.state = 'approach'; p.approachStart = p.mesh.position.clone(); p.approachT = 0; }
         return;
       }
-
       case 'approach': {
-        p.approachT = (p.approachT || 0) + dt;
+        p.approachT += dt;
         const start = p.approachStart;
         const end = p.rw.threshold.clone(); end.y = GROUND_Y;
         const total = start.distanceTo(end);
-        const covered = p.approachT * CRUISE_SPEED;
-        const k = Math.min(1, covered / total);
-        // Curva de descenso exponencial: mantiene altitud y baja al final
+        const k = Math.min(1, (p.approachT * CRUISE_SPEED) / total);
         const kAlt = Math.pow(k, 2.5);
-        // Interpolación horizontal lineal, vertical con kAlt
-        const px = start.x + (end.x - start.x) * k;
-        const pz = start.z + (end.z - start.z) * k;
-        const py = start.y - (start.y - end.y) * kAlt;
-        p.mesh.position.set(px, py, pz);
-        const dx = end.x - p.mesh.position.x;
-        const dz = end.z - p.mesh.position.z;
+        p.mesh.position.set(
+          start.x + (end.x - start.x) * k,
+          start.y - (start.y - end.y) * kAlt,
+          start.z + (end.z - start.z) * k
+        );
+        const dx = end.x - p.mesh.position.x, dz = end.z - p.mesh.position.z;
         if (Math.abs(dx) + Math.abs(dz) > 1) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
         p.mesh.rotation.set(-0.12 * (1 - k), p.yaw, 0);
         for (const f of p.flames) f.visible = false;
@@ -869,12 +1025,10 @@
           p.mesh.position.copy(end);
           p.yaw = p.rw.landingHeading;
           p.mesh.rotation.set(0, p.yaw, 0);
-          p.state = 'rollout';
-          p.rollSpeed = 55;
+          p.state = 'rollout'; p.rollSpeed = 55;
         }
         return;
       }
-
       case 'rollout': {
         p.rollSpeed = Math.max(0, p.rollSpeed - 22 * dt);
         p.mesh.position.addScaledVector(p.rw.landingDir, p.rollSpeed * dt);
@@ -885,11 +1039,9 @@
         if (p.rollSpeed < 1 || dEnd < 5) p.state = 'taxi_in';
         return;
       }
-
       case 'taxi_in': {
         stepToward(p.mesh.position, p.apron, TAXI_SPEED * dt);
-        const dx = p.apron.x - p.mesh.position.x;
-        const dz = p.apron.z - p.mesh.position.z;
+        const dx = p.apron.x - p.mesh.position.x, dz = p.apron.z - p.mesh.position.z;
         if (Math.abs(dx) + Math.abs(dz) > 0.5) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
         p.mesh.position.y = GROUND_Y;
         p.mesh.rotation.set(0, p.yaw, 0);
@@ -899,7 +1051,6 @@
         }
         return;
       }
-
       default: resetPlane(p, 5); return;
     }
   }
@@ -937,10 +1088,10 @@
       p.mesh.position.addScaledVector(dir, Math.min(CRUISE_SPEED * dt, dist));
       const yawT = yawFromDir(dir.x, dir.z);
       p.yaw = rotateSmooth(p.yaw, yawT, dt, 4);
-      let yawDiff = yawT - p.yaw;
-      while (yawDiff >  Math.PI) yawDiff -= 2 * Math.PI;
-      while (yawDiff < -Math.PI) yawDiff += 2 * Math.PI;
-      p.mesh.rotation.set(-dir.y * 0.4, p.yaw, -yawDiff * 1.2);
+      let yd = yawT - p.yaw;
+      while (yd >  Math.PI) yd -= 2 * Math.PI;
+      while (yd < -Math.PI) yd += 2 * Math.PI;
+      p.mesh.rotation.set(-dir.y * 0.4, p.yaw, -yd * 1.2);
     }
     for (const f of p.flames) { f.visible = true; f.scale.setScalar(0.7 + Math.random() * 0.6); }
 
@@ -958,26 +1109,21 @@
     if (p.hp <= 0) { p.isDead = true; p.respawnTimer = 0; API.playSound('explosion'); }
   }
 
-  // ===================== HELIS =====================
+  // ===================== HELI UPDATE =====================
   function updateHeli(h, dt) {
     if (h.isDead) {
-      h.respawnTimer += dt;
-      h.mesh.visible = false;
+      h.respawnTimer += dt; h.mesh.visible = false;
       if (h.hpGroup) h.hpGroup.visible = false;
       if (h.respawnTimer > 12) {
         h.hp = h.maxHp; h.isDead = false;
         h.mesh.visible = true; if (h.hpGroup) h.hpGroup.visible = true;
-        h.mesh.position.copy(h.basePos);
-        h.respawnTimer = 0;
+        h.mesh.position.copy(h.basePos); h.respawnTimer = 0;
       }
       return;
     }
-    // Failsafe heli
-    if (Math.abs(h.mesh.position.x) > WORLD_SIZE * 0.55 ||
-        Math.abs(h.mesh.position.z) > WORLD_SIZE * 0.55) {
+    if (Math.abs(h.mesh.position.x) > WORLD_SIZE * 0.55 || Math.abs(h.mesh.position.z) > WORLD_SIZE * 0.55) {
       h.mesh.position.copy(h.basePos);
     }
-
     if (h.rotorMain) h.rotorMain.rotation.y += 40 * dt;
     if (h.rotorTail) h.rotorTail.rotation.x += 45 * dt;
     h.cooldown -= dt; h.missileCooldown -= dt;
@@ -1031,8 +1177,7 @@
     if (h.turret) {
       const tgtPos = target ? target.mesh.position : (gt ? gt.mesh.position : null);
       if (tgtPos) {
-        const dx = tgtPos.x - h.mesh.position.x;
-        const dz = tgtPos.z - h.mesh.position.z;
+        const dx = tgtPos.x - h.mesh.position.x, dz = tgtPos.z - h.mesh.position.z;
         const relYaw = yawFromDir(dx, dz) - h.yaw;
         h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
       }
@@ -1053,27 +1198,87 @@
     if (h.hp <= 0) { h.isDead = true; h.respawnTimer = 0; API.playSound('explosion'); }
   }
 
-  // ===================== DAÑO =====================
+  // ===================== DAÑO A TODO =====================
   function resolveModDamage() {
-    const all = [...mod.planes, ...mod.helis, ...mod.hqs];
+    const targets = [...mod.planes, ...mod.helis, ...mod.hqs];
     for (let i = API.projectiles.length - 1; i >= 0; i--) {
       const pr = API.projectiles[i];
       if (!pr || !pr.mesh) continue;
-      for (const u of all) {
-        if (u.isDead) continue;
-        if (u.team === pr.team) continue;
+      const pPos = pr.mesh.position;
+      let consumed = false;
+
+      // Contra aviones/helis/HQ
+      for (const u of targets) {
+        if (u.isDead || u.team === pr.team) continue;
         const r = (u.radius || 4) + 1.5;
-        if (pr.mesh.position.distanceTo(u.mesh.position) < r) {
+        if (pPos.distanceTo(u.mesh.position) < r) {
           u.hp -= pr.damage;
-          API.scene.remove(pr.mesh);
-          API.projectiles.splice(i, 1);
-          break;
+          shakeAmount = Math.max(shakeAmount, 0.6);
+          consumed = true; break;
         }
+      }
+
+      // Contra edificios
+      if (!consumed) {
+        outer:
+        for (const b of mod.buildings) {
+          if (b.state === 'destroyed') continue;
+          if (pPos.distanceTo(V(b.x, 4, b.z)) > b.radius + 3) continue;
+          for (const w of b.groundWalls) {
+            if (w.hp <= 0) continue;
+            const worldPos = V(b.x + w.pos[0], w.pos[1], b.z + w.pos[2]);
+            if (pPos.distanceTo(worldPos) < 5) {
+              damageWall(b, w, pr.damage);
+              shakeAmount = Math.max(shakeAmount, 0.4);
+              consumed = true; break outer;
+            }
+          }
+          for (const w of b.upperWalls) {
+            if (w.hp <= 0) continue;
+            const wp = w.mesh.getWorldPosition(new THREE.Vector3());
+            if (pPos.distanceTo(wp) < 4.5) {
+              w.hp -= pr.damage;
+              if (w.hp <= 0) { w.mesh.visible = false; spawnDust(wp); }
+              consumed = true; break outer;
+            }
+          }
+        }
+      }
+
+      // Contra árboles
+      if (!consumed) {
+        for (const t of mod.trees) {
+          if (t.state !== 'alive') continue;
+          if (pPos.distanceTo(t.mesh.position) < 3) {
+            t.hp -= pr.damage;
+            if (t.hp <= 0) destroyTree(t);
+            else spawnDust(pPos);
+            consumed = true; break;
+          }
+        }
+      }
+
+      if (consumed) {
+        API.scene.remove(pr.mesh);
+        API.projectiles.splice(i, 1);
       }
     }
   }
 
-  // ===================== ESCENARIO ANIM =====================
+  // ===================== DUST / SMOKE ANIM =====================
+  function updateDust(dt) {
+    for (let i = mod.dust.length - 1; i >= 0; i--) {
+      const d = mod.dust[i];
+      d.t += dt;
+      d.mesh.position.addScaledVector(d.vel, dt);
+      d.vel.y -= 3 * dt;
+      d.mesh.material.opacity = Math.max(0, 0.85 * (1 - d.t / d.life));
+      d.mesh.scale.multiplyScalar(1 + dt * 0.8);
+      if (d.t >= d.life) { API.scene.remove(d.mesh); mod.dust.splice(i, 1); }
+    }
+  }
+
+  // ===================== SMOKES / CLOUDS / HUD =====================
   function updateSmokes(dt) {
     for (const s of mod.smokes) {
       s.t += dt;
@@ -1088,10 +1293,7 @@
     for (const c of mod.clouds) {
       c.mesh.position.x += c.speed * dt;
       c.mesh.position.z += c.drift * dt;
-      if (c.mesh.position.x > R) {
-        c.mesh.position.x = -R;
-        c.mesh.position.z = rnd(-R, R);
-      }
+      if (c.mesh.position.x > R) { c.mesh.position.x = -R; c.mesh.position.z = rnd(-R, R); }
     }
   }
   function updateHQHUD() {
@@ -1121,6 +1323,16 @@
     if (enemy && enemy.hp <= 0 && !enemy.isDead) { enemy.isDead = true; showEndScreen(true); }
   }
 
+  // ===================== SCREEN SHAKE =====================
+  function applyShake(dt) {
+    if (shakeAmount > 0.02) {
+      API.camera.position.x += (Math.random() - 0.5) * shakeAmount;
+      API.camera.position.y += (Math.random() - 0.5) * shakeAmount * 0.6;
+      API.camera.position.z += (Math.random() - 0.5) * shakeAmount;
+      shakeAmount *= 0.85;
+    } else shakeAmount = 0;
+  }
+
   // ===================== HOOK =====================
   const prevOnUpdate = API.onUpdate;
   API.onUpdate = function (dt) {
@@ -1132,13 +1344,17 @@
     for (const ap of [allyAirport, enemyAirport]) if (ap && ap.radarPivot) ap.radarPivot.rotation.y += dt * 1.3;
     for (const p of mod.planes) { try { updatePlane(p, dt); } catch (e) { console.error('plane err', e); } }
     for (const h of mod.helis)  { try { updateHeli(h, dt);  } catch (e) { console.error('heli err', e); } }
+    updateTrees(dt);
+    updateBuildings(dt);
     updateSmokes(dt);
     updateClouds(dt);
+    updateDust(dt);
     resolveModDamage();
     updateHQHUD();
     checkWinLose();
+    applyShake(dt);
   };
 
-  window.AirConquestMod = { version: '4.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis };
-  console.log(`✈️ Mod Aire y Conquista v4.0 listo — mapa ${WORLD_SIZE}×${WORLD_SIZE}, ${mod.planes.length} cazas, ${mod.helis.length} helis.`);
+  window.AirConquestMod = { version: '5.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis, buildings: mod.buildings, trees: mod.trees };
+  console.log(`✈️ Mod Aire y Conquista v5.0 listo — ${mod.planes.length} cazas, ${mod.helis.length} helis, ${mod.buildings.length} edificios destruibles, ${mod.trees.length} árboles destruibles.`);
 })();
