@@ -1,9 +1,11 @@
 /* ============================================================
-   MOD: Mejora de Mundo v4.0
-   - 4 tipos de casas con escaleras, 2 puertas, ventanas transparentes
-   - Reemplaza TODAS las casas base por destructibles
-   - Registradas en houseList/coverObjs (IA entra y usa cobertura)
-   - Banking real + crash cinematográfico
+   MOD: Mejora de Mundo v5.0
+   - Río truncado + puentes
+   - Árboles destructibles
+   - Aeropuertos, cuarteles HQ
+   - Cazas con ciclo de vuelo completo + banking
+   - Crash cinematográfico
+   - SIN casas (usar mod casas.js)
    ============================================================ */
 (function () {
   if (window.__WORLD_IMPROVE_LOADED) { console.warn('⚠️ Mejora de Mundo ya cargada'); return; }
@@ -15,8 +17,8 @@
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
 
-  console.log('🌍 Mod Mejora de Mundo v4.0: iniciando...');
-  API.say('🌍 Mejora de Mundo v4.0');
+  console.log('🌍 Mod Mejora de Mundo v5.0: iniciando...');
+  API.say('🌍 Mejora de Mundo v5.0');
 
   const GROUND_Y = 1.0, CRUISE_ALT = 32, TAXI_SPEED = 14;
   const ROLL_SPEED = 65, CRUISE_SPEED = 52, APPROACH_DIST = 170;
@@ -32,7 +34,10 @@
   const ALLY_HQ_POS   = V(  0, 0, -280);
   const ENEMY_HQ_POS  = V(  0, 0,  280);
 
-  const mod = { planes: [], helis: [], hqs: [], buildings: [], trees: [], smokes: [], clouds: [], dust: [], debris: [], gameOver: false };
+  // Exponer datos del mundo para otros mods
+  window.WorldData = { RIVER, BRIDGES_X, ALLY_AIRPORT, ENEMY_AIRPORT, ALLY_HQ_POS, ENEMY_HQ_POS, WORLD_SIZE, LAND_HALF };
+
+  const mod = { planes: [], helis: [], hqs: [], trees: [], smokes: [], clouds: [], dust: [], debris: [], gameOver: false };
   let shakeAmount = 0;
 
   // ===================== HUD =====================
@@ -176,456 +181,6 @@
     }
   }
 
-  // ===================== OCULTAR CASAS BASE =====================
-  function hideBaseHouses() {
-    let hidden = 0;
-    API.scene.traverse(obj => {
-      if (obj.isInstancedMesh && obj.material && obj.material.color) {
-        const hex = obj.material.color.getHex();
-        // Paredes, techos, puertas, ventanas base
-        if (hex === 0xd8d2c4 || hex === 0x883333 || hex === 0x6a2626 ||
-            hex === 0x5a3a1e || hex === 0x2d4a66) {
-          obj.visible = false;
-          hidden++;
-        }
-      }
-    });
-    console.log(`🏚️ ${hidden} instanced meshes base ocultados`);
-  }
-
-  // ===================== MATERIALES DE CASA =====================
-  const MAT_HOUSE = {
-    win: new THREE.MeshLambertMaterial({ color: 0x88bbdd, transparent: true, opacity: 0.4, depthWrite: false, emissive: 0x113355 }),
-    door: new THREE.MeshLambertMaterial({ color: 0x3a2a1a }),
-    stairs: new THREE.MeshLambertMaterial({ color: 0x9a9a90 }),
-    rail: new THREE.MeshLambertMaterial({ color: 0x555555 }),
-    roof: new THREE.MeshLambertMaterial({ color: 0x7a3a2a }),
-    concrete: new THREE.MeshLambertMaterial({ color: 0xb8b8b0 }),
-    sandbag: new THREE.MeshLambertMaterial({ color: 0x9a8a5a }),
-  };
-  function houseWallMat(color) { return new THREE.MeshLambertMaterial({ color }); }
-  function houseFloorMat(color) { return new THREE.MeshLambertMaterial({ color: color || 0x8a4a3a }); }
-
-  // ===================== CONSTRUCTOR DE CASAS =====================
-  function buildHouse(x, z, type, hue) {
-    const g = new THREE.Group();
-    g.position.set(x, 0, z);
-
-    const W = [8, 9, 10, 7][type];
-    const D = [8, 9, 10, 9][type];
-    const floors = [2, 2, 1, 3][type];
-    const FLOOR_H = 4;
-    const T = 0.5;
-    const wallColor = hue || 0xd8d2c4;
-    const accentColor = 0x8a4a3a;
-
-    const wallMat = houseWallMat(wallColor);
-    const accentMat = houseWallMat(accentColor);
-
-    const groundFloor = new THREE.Group();
-    g.add(groundFloor);
-    const groundWalls = [];
-    const upperFloors = [];
-
-    // Puertas: frente y lado (2 puertas)
-    const doorGap = 2.2;
-
-    // ==== PAREDES POR PISO ====
-    for (let f = 0; f < floors; f++) {
-      const floorGroup = f === 0 ? groundFloor : new THREE.Group();
-      if (f > 0) { floorGroup.position.y = f * FLOOR_H; g.add(floorGroup); }
-      const mat = f === 0 ? wallMat : (f === 1 ? accentMat : wallMat);
-      const wallsThisFloor = [];
-      const yCenter = FLOOR_H / 2;
-
-      // Pared trasera (con ventanas)
-      const backWall = new THREE.Mesh(new THREE.BoxGeometry(W, FLOOR_H, T), mat);
-      backWall.position.set(0, yCenter, -D/2);
-      backWall.castShadow = true; backWall.receiveShadow = true;
-      floorGroup.add(backWall);
-      wallsThisFloor.push({ mesh: backWall, hp: 100, maxHp: 100, pos: [0, yCenter, -D/2], cracked: false });
-
-      // Pared frontal (con 1 puerta en ground, ventana en upper)
-      if (f === 0) {
-        // 2 trozos laterales + dintel
-        const sideW = (W - doorGap) / 2;
-        const left = new THREE.Mesh(new THREE.BoxGeometry(sideW, FLOOR_H, T), mat);
-        left.position.set(-(W/2 - sideW/2), yCenter, D/2);
-        left.castShadow = true; left.receiveShadow = true;
-        floorGroup.add(left);
-        wallsThisFloor.push({ mesh: left, hp: 100, maxHp: 100, pos: [-(W/2 - sideW/2), yCenter, D/2], cracked: false });
-
-        const right = new THREE.Mesh(new THREE.BoxGeometry(sideW, FLOOR_H, T), mat);
-        right.position.set(W/2 - sideW/2, yCenter, D/2);
-        right.castShadow = true; right.receiveShadow = true;
-        floorGroup.add(right);
-        wallsThisFloor.push({ mesh: right, hp: 100, maxHp: 100, pos: [W/2 - sideW/2, yCenter, D/2], cracked: false });
-
-        // Dintel superior (encima de la puerta)
-        const lintel = new THREE.Mesh(new THREE.BoxGeometry(doorGap, FLOOR_H - 2.8, T), mat);
-        lintel.position.set(0, 2.8 + (FLOOR_H - 2.8) / 2, D/2);
-        lintel.castShadow = true;
-        floorGroup.add(lintel);
-        wallsThisFloor.push({ mesh: lintel, hp: 100, maxHp: 100, pos: [0, 2.8 + (FLOOR_H - 2.8) / 2, D/2], cracked: false });
-
-        // Puerta (madera)
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(doorGap - 0.2, 2.8), MAT_HOUSE.door);
-        door.position.set(0, 1.4, D/2 + 0.01);
-        floorGroup.add(door);
-      } else {
-        // Pared completa con 2 ventanas transparentes
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(W, FLOOR_H, T), mat);
-        wall.position.set(0, yCenter, D/2);
-        wall.castShadow = true; wall.receiveShadow = true;
-        floorGroup.add(wall);
-        wallsThisFloor.push({ mesh: wall, hp: 100, maxHp: 100, pos: [0, yCenter, D/2], cracked: false });
-      }
-
-      // Pared izquierda (con 1 puerta en ground a un lado)
-      if (f === 0 && type === 1) {
-        // Segunda puerta en el lateral
-        const sideD = (D - doorGap) / 2;
-        const a = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, sideD), mat);
-        a.position.set(-W/2, yCenter, -(D/2 - sideD/2));
-        a.castShadow = true; a.receiveShadow = true;
-        floorGroup.add(a);
-        wallsThisFloor.push({ mesh: a, hp: 100, maxHp: 100, pos: [-W/2, yCenter, -(D/2 - sideD/2)], cracked: false });
-
-        const b = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, sideD), mat);
-        b.position.set(-W/2, yCenter, D/2 - sideD/2);
-        b.castShadow = true; b.receiveShadow = true;
-        floorGroup.add(b);
-        wallsThisFloor.push({ mesh: b, hp: 100, maxHp: 100, pos: [-W/2, yCenter, D/2 - sideD/2], cracked: false });
-
-        const lintel = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H - 2.8, doorGap), mat);
-        lintel.position.set(-W/2, 2.8 + (FLOOR_H - 2.8) / 2, 0);
-        lintel.castShadow = true;
-        floorGroup.add(lintel);
-        wallsThisFloor.push({ mesh: lintel, hp: 100, maxHp: 100, pos: [-W/2, 2.8 + (FLOOR_H - 2.8)/2, 0], cracked: false });
-
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(doorGap - 0.2, 2.8), MAT_HOUSE.door);
-        door.rotation.y = Math.PI / 2;
-        door.position.set(-W/2 - 0.01, 1.4, 0);
-        floorGroup.add(door);
-      } else {
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, D), mat);
-        wall.position.set(-W/2, yCenter, 0);
-        wall.castShadow = true; wall.receiveShadow = true;
-        floorGroup.add(wall);
-        wallsThisFloor.push({ mesh: wall, hp: 100, maxHp: 100, pos: [-W/2, yCenter, 0], cracked: false });
-      }
-
-      // Pared derecha (igual sin puerta)
-      const rightWall = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, D), mat);
-      rightWall.position.set(W/2, yCenter, 0);
-      rightWall.castShadow = true; rightWall.receiveShadow = true;
-      floorGroup.add(rightWall);
-      wallsThisFloor.push({ mesh: rightWall, hp: 100, maxHp: 100, pos: [W/2, yCenter, 0], cracked: false });
-
-      // ===== VENTANAS TRANSPARENTES =====
-      const winY = FLOOR_H * 0.55;
-      const winW = 1.4, winH = 1.4;
-      // Delanteras
-      if (f > 0) {
-        for (const wx of [-W/4, W/4]) {
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), MAT_HOUSE.win);
-          win.position.set(wx, winY, D/2 + 0.02);
-          floorGroup.add(win);
-        }
-      } else if (type !== 0) {
-        for (const wx of [-W/3, W/3]) {
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), MAT_HOUSE.win);
-          win.position.set(wx, winY, D/2 + 0.02);
-          floorGroup.add(win);
-        }
-      }
-      // Traseras
-      for (const wx of [-W/4, W/4]) {
-        const win = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), MAT_HOUSE.win);
-        win.rotation.y = Math.PI;
-        win.position.set(wx, winY, -D/2 - 0.02);
-        floorGroup.add(win);
-      }
-      // Laterales
-      for (const wz of [-D/4, D/4]) {
-        const wl = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), MAT_HOUSE.win);
-        wl.rotation.y = -Math.PI / 2;
-        wl.position.set(-W/2 - 0.02, winY, wz);
-        floorGroup.add(wl);
-        const wr = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), MAT_HOUSE.win);
-        wr.rotation.y = Math.PI / 2;
-        wr.position.set(W/2 + 0.02, winY, wz);
-        floorGroup.add(wr);
-      }
-
-      // Losa intermedia (entre pisos)
-      if (f < floors - 1) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.4, 0.3, D + 0.4), houseFloorMat());
-        slab.position.y = (f + 1) * FLOOR_H + 0.15;
-        slab.castShadow = true; slab.receiveShadow = true;
-        g.add(slab);
-      }
-
-      if (f === 0) groundWalls.push(...wallsThisFloor);
-      else upperFloors.push({ walls: wallsThisFloor, group: floorGroup });
-    }
-
-    // ===== ESCALERAS EXTERIORES (visual) =====
-    const stairs = new THREE.Group();
-    const sx = -W/2 - 1.5;
-    for (let i = 0; i < floors * FLOOR_H * 2; i++) {
-      const step = new THREE.Mesh(new THREE.BoxGeometry(2, 0.3, 0.6), MAT_HOUSE.stairs);
-      step.position.set(sx, 0.15 + i * 0.25, -D/2 + 1 + i * 0.55);
-      step.castShadow = true;
-      stairs.add(step);
-      if (step.position.z > D/2 - 1) break;
-    }
-    g.add(stairs);
-    // Barandilla de la escalera
-    const railL = new THREE.Mesh(new THREE.BoxGeometry(0.08, floors * FLOOR_H + 1, 0.08), MAT_HOUSE.rail);
-    railL.position.set(sx - 1, FLOOR_H / 2, 0);
-    g.add(railL);
-
-    // ===== TECHO =====
-    if (type === 2) {
-      // Búnker — techo plano con sacos de arena
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.5, D + 1), MAT_HOUSE.concrete);
-      roof.position.y = FLOOR_H + 0.25;
-      roof.castShadow = true;
-      g.add(roof);
-      // Sacos de arena alrededor
-      for (let i = 0; i < 12; i++) {
-        const s = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.4, 0.6), MAT_HOUSE.sandbag);
-        const a = (i / 12) * Math.PI * 2;
-        s.position.set(Math.cos(a) * (W/2 + 0.4), FLOOR_H + 0.8, Math.sin(a) * (D/2 + 0.4));
-        s.rotation.y = a;
-        g.add(s);
-      }
-    } else {
-      // Techo inclinado
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.5, D + 1), MAT_HOUSE.roof);
-      roof.position.y = floors * FLOOR_H + 0.25;
-      roof.castShadow = true;
-      g.add(roof);
-      // Chimenea
-      if (type === 0 || type === 3) {
-        const chim = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), houseFloorMat(0x7a3a2a));
-        chim.position.set(W/3, floors * FLOOR_H + 1, -D/3);
-        g.add(chim);
-      }
-    }
-
-    API.scene.add(g);
-
-    // Colisión
-    if (window.houses && Array.isArray(window.houses)) {
-      window.houses.push({
-        pos: null,
-        min: V(x - W/2, 0, z - D/2),
-        max: V(x + W/2, floors * FLOOR_H, z + D/2),
-      });
-    }
-    // Slots de cobertura para IA
-    if (window.houseList && Array.isArray(window.houseList)) {
-      const slots = [];
-      const offsets = [[-3,-3.8],[3,-3.8],[-3.8,-3],[-3.8,3],[3.8,-3],[3.8,3],[-4,3.8],[4,3.8]];
-      for (const s of offsets) slots.push({ x: x + s[0], z: z + s[1], hx: x, hz: z, occ: null });
-      window.houseList.push({ x, z, slots });
-    }
-    if (window.coverObjs && Array.isArray(window.coverObjs)) {
-      window.coverObjs.push({ x, z, r: 7 });
-    }
-
-    const b = {
-      mesh: g, groundFloor, groundWalls,
-      upperFloors,
-      hp: 400 * floors, maxHp: 400 * floors,
-      state: 'intact', collapseT: 0,
-      x, z, W, D, floors, FLOOR_H,
-      radius: Math.max(W, D) / 2 + 0.5,
-    };
-    mod.buildings.push(b);
-    return b;
-  }
-
-  // ===================== REEMPLAZAR CASAS BASE =====================
-  function replaceBaseHouses() {
-    if (!window.houseList || !Array.isArray(window.houseList)) {
-      console.warn('⚠️ houseList no encontrada, no se puede reemplazar casas base');
-      return;
-    }
-    const positions = [];
-    for (const h of window.houseList) {
-      if (h && h.x !== undefined) positions.push({ x: h.x, z: h.z });
-    }
-    // Vaciar houseList para que solo tenga las nuestras
-    window.houseList.length = 0;
-    // Limpiar coverObjs también
-    if (window.coverObjs && Array.isArray(window.coverObjs)) {
-      window.coverObjs.length = 0;
-    }
-
-    let replaced = 0;
-    positions.forEach((p, i) => {
-      // No colocar en río
-      if (p.z >= RIVER.zMin - 3 && p.z <= RIVER.zMax + 3) return;
-      // No en el mar
-      if (Math.abs(p.x) > 128) return;
-      // Alternar tipos
-      const type = i % 4;
-      const hue = [0xd8d2c4, 0xc8b8a0, 0xb8c8d0, 0xd0c0a0][i % 4];
-      buildHouse(p.x, p.z, type, hue);
-      replaced++;
-    });
-    console.log(`🏘️ ${replaced} casas destructibles (4 tipos) reemplazaron las base`);
-  }
-
-  // ===================== DAÑO A EDIFICIO =====================
-  function damageWall(b, wall, dmg) {
-    if (wall.hp <= 0) return;
-    wall.hp -= dmg;
-    const ratio = Math.max(0, wall.hp / wall.maxHp);
-    if (wall.mesh.material && wall.mesh.material.color) {
-      const c = wall.mesh.material.color;
-      c.r = Math.min(1, c.r * 0.85 + 0.15 + (1 - ratio) * 0.15);
-      c.g = Math.max(0, c.g * (0.75 + ratio * 0.15));
-      c.b = Math.max(0, c.b * (0.75 + ratio * 0.15));
-    }
-    wall.mesh.position.y = wall.pos[1] + (Math.random() - 0.5) * 0.15;
-
-    spawnDust(V(
-      b.x + wall.pos[0] + (Math.random() - 0.5) * 3,
-      wall.pos[1] + (Math.random() - 0.5) * 2,
-      b.z + wall.pos[2] + (Math.random() - 0.5) * 3
-    ));
-
-    if (ratio < 0.4 && !wall.cracked) {
-      wall.cracked = true;
-      const crackMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a, transparent: true, opacity: 0.7 });
-      for (let i = 0; i < 3; i++) {
-        const crack = new THREE.Mesh(new THREE.PlaneGeometry(rnd(0.3, 0.8), rnd(1, 2)), crackMat);
-        if (Math.abs(wall.pos[0]) > 0.5 * b.W) {
-          crack.position.set(wall.pos[0] + (wall.pos[0] > 0 ? 0.26 : -0.26), wall.pos[1] + rnd(-1, 1), wall.pos[2] + rnd(-2, 2));
-          crack.rotation.y = Math.PI / 2;
-        } else {
-          crack.position.set(wall.pos[0] + rnd(-2, 2), wall.pos[1] + rnd(-1, 1), wall.pos[2] + (wall.pos[2] > 0 ? 0.26 : -0.26));
-        }
-        crack.rotation.z = rnd(-0.5, 0.5);
-        b.groundFloor.add(crack);
-      }
-    }
-
-    if (wall.hp <= 0) {
-      wall.mesh.visible = false;
-      spawnFlyingDebris(V(b.x + wall.pos[0], wall.pos[1] + 1, b.z + wall.pos[2]), 8);
-      spawnDust(wall.mesh.position);
-      API.playSound('explosion');
-      if (b.groundWalls.every(w => w.hp <= 0)) triggerCollapse(b);
-    }
-  }
-  function triggerCollapse(b) {
-    if (b.state !== 'intact') return;
-    b.state = 'collapsing';
-    b.collapseT = 0;
-    API.playSound('explosion');
-    shakeAmount = Math.max(shakeAmount, 3);
-  }
-  function updateBuildings(dt) {
-    for (const b of mod.buildings) {
-      if (b.state === 'collapsing') {
-        b.collapseT += dt;
-        const t = b.collapseT;
-        if (t < 0.4) {
-          // Temblor
-          b.groundFloor.position.x = Math.sin(t * 80) * 0.08;
-          b.groundFloor.position.z = Math.cos(t * 70) * 0.08;
-          if (Math.random() < 0.4) spawnDust(V(b.x + rnd(-2, 2), 4, b.z + rnd(-2, 2)));
-        } else if (t < 1.4) {
-          // Primer piso colapsa
-          const k = (t - 0.4);
-          const ease = k * k;
-          for (const uf of b.upperFloors) {
-            uf.group.position.y = uf.group.position.y - ease * 0.5 - 2.2 * (k > 0.5 ? (k - 0.5) * 2 : 0);
-            uf.group.rotation.z = Math.sin(k * Math.PI) * 0.22;
-          }
-          if (Math.random() < 0.6) spawnFlyingDebris(V(b.x + rnd(-3, 3), rnd(3, 6), b.z + rnd(-3, 3)), 1);
-          if (Math.random() < 0.5) spawnDust(V(b.x + rnd(-3, 3), 3, b.z + rnd(-3, 3)));
-        } else if (t < 2.4) {
-          // Colapso final
-          const k = (t - 1.4);
-          const ease = k * k;
-          for (const uf of b.upperFloors) {
-            uf.group.position.y = 1.8 - ease * 1.8;
-            uf.group.rotation.z = 0.22 + ease * 0.4;
-          }
-          if (Math.random() < 0.7) spawnFlyingDebris(V(b.x + rnd(-4, 4), rnd(2, 5), b.z + rnd(-4, 4)), 2);
-          if (Math.random() < 0.6) spawnDust(V(b.x + rnd(-4, 4), 1.5, b.z + rnd(-4, 4)));
-        } else {
-          b.state = 'destroyed';
-          spawnSmokePlume(V(b.x, 1, b.z));
-          shakeAmount = Math.max(shakeAmount, 4);
-          for (const uf of b.upperFloors) uf.group.visible = false;
-          b.groundFloor.visible = false;
-
-          // Escombros persistentes
-          const rubbleMat = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
-          const rubbleMat2 = new THREE.MeshLambertMaterial({ color: 0x4a3a2a });
-          for (let i = 0; i < 30; i++) {
-            const r = new THREE.Mesh(
-              new THREE.BoxGeometry(rnd(0.4, 1.8), rnd(0.2, 0.9), rnd(0.4, 1.6)),
-              Math.random() < 0.5 ? rubbleMat : rubbleMat2
-            );
-            r.position.set(b.x + rnd(-4, 4), rnd(0.15, 1.5), b.z + rnd(-4, 4));
-            r.rotation.set(rnd(0, 3), rnd(0, 3), rnd(0, 3));
-            r.castShadow = true;
-            API.scene.add(r);
-            if (!b.rubble) b.rubble = [];
-            b.rubble.push(r);
-          }
-          // Fuego
-          b.fires = [];
-          for (let i = 0; i < 3; i++) {
-            const fire = new THREE.Mesh(
-              new THREE.SphereGeometry(rnd(0.4, 0.7), 6, 5),
-              new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.9 })
-            );
-            fire.position.set(b.x + rnd(-3, 3), rnd(0.3, 1.2), b.z + rnd(-3, 3));
-            API.scene.add(fire);
-            b.fires.push({ mesh: fire, t: Math.random() * 10, baseY: fire.position.y });
-          }
-          b.smokeTimer = 0;
-          // Quitar colisión
-          if (window.houses && Array.isArray(window.houses)) {
-            const idx = window.houses.findIndex(h => h && h.min &&
-              Math.abs(h.min.x - (b.x - b.W/2)) < 0.5 &&
-              Math.abs(h.min.z - (b.z - b.D/2)) < 0.5);
-            if (idx >= 0) window.houses.splice(idx, 1);
-          }
-        }
-      }
-      if (b.state === 'destroyed' && b.fires) {
-        for (const f of b.fires) {
-          f.t += dt;
-          const s = 0.7 + Math.sin(f.t * 8) * 0.3 + Math.random() * 0.2;
-          f.mesh.scale.setScalar(s);
-          f.mesh.position.y = f.baseY + Math.sin(f.t * 4) * 0.1;
-          f.mesh.material.opacity = 0.7 + Math.sin(f.t * 6) * 0.25;
-        }
-        b.smokeTimer = (b.smokeTimer || 0) + dt;
-        if (b.smokeTimer > 0.6) {
-          b.smokeTimer = 0;
-          const smoke = new THREE.Mesh(
-            new THREE.SphereGeometry(rnd(0.6, 1.2), 6, 5),
-            new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.6, depthWrite: false })
-          );
-          smoke.position.set(b.x + rnd(-2, 2), 1.5, b.z + rnd(-2, 2));
-          API.scene.add(smoke);
-          mod.dust.push({ mesh: smoke, vel: V(rnd(-0.3, 0.3), rnd(1.5, 2.5), rnd(-0.3, 0.3)), life: 3.5, t: 0 });
-        }
-      }
-    }
-  }
-
   // ===================== EXTENDER MUNDO =====================
   function extendWorld() {
     const bigGround = new THREE.Mesh(
@@ -734,6 +289,38 @@
       API.scene.add(br);
     }
   }
+  function addIndustrialZone() {
+    const matBrick = new THREE.MeshLambertMaterial({ color: 0x8a5a4a });
+    const matRoof  = new THREE.MeshLambertMaterial({ color: 0x4a4a4a });
+    const matStack = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
+    const matRed   = new THREE.MeshLambertMaterial({ color: 0xaa2222 });
+    for (const base of [[-180, -120], [180, -120], [-180, 120], [180, 120]]) {
+      const safeX = Math.max(-LAND_HALF, Math.min(LAND_HALF, base[0]));
+      const bz = base[1];
+      const nave = new THREE.Mesh(new THREE.BoxGeometry(22, 8, 14), matBrick);
+      nave.position.set(safeX, 4, bz); nave.castShadow = true; nave.receiveShadow = true; API.scene.add(nave);
+      const techo = new THREE.Mesh(new THREE.BoxGeometry(23, 0.6, 15), matRoof); techo.position.set(safeX, 8.3, bz); API.scene.add(techo);
+      const chim = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.0, 20, 10), matStack); chim.position.set(safeX + 8, 10, bz - 4); chim.castShadow = true; API.scene.add(chim);
+      const aro = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 1, 10), matRed); aro.position.set(safeX + 8, 18, bz - 4); API.scene.add(aro);
+      const smoke = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 6), new THREE.MeshLambertMaterial({ color: 0xcccccc, transparent: true, opacity: 0.55, depthWrite: false }));
+      smoke.position.set(safeX + 8, 21, bz - 4); API.scene.add(smoke);
+      mod.smokes.push({ mesh: smoke, baseY: 21, t: Math.random() * 6 });
+    }
+  }
+  function addStreetLights() {
+    const matPost = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const matLamp = new THREE.MeshBasicMaterial({ color: 0xfff2b0 });
+    for (let i = -8; i <= 8; i++) {
+      for (const sx of [-8, 8]) {
+        const p = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 6, 6), matPost);
+        p.position.set(sx, 3, i * 22); API.scene.add(p);
+        const a = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.12), matPost);
+        a.position.set(sx + (sx > 0 ? -0.7 : 0.7), 5.9, i * 22); API.scene.add(a);
+        const l = new THREE.Mesh(new THREE.SphereGeometry(0.35, 6, 6), matLamp);
+        l.position.set(sx + (sx > 0 ? -1.3 : 1.3), 5.85, i * 22); API.scene.add(l);
+      }
+    }
+  }
 
   // ===================== ÁRBOL =====================
   function addTree(x, z) {
@@ -793,42 +380,6 @@
       if (inWater(pos.x, pos.z)) return true;
       return _orig(pos, radius);
     };
-  }
-
-  // ===================== ZONA INDUSTRIAL =====================
-  function addIndustrialZone() {
-    const matBrick = new THREE.MeshLambertMaterial({ color: 0x8a5a4a });
-    const matRoof  = new THREE.MeshLambertMaterial({ color: 0x4a4a4a });
-    const matStack = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
-    const matRed   = new THREE.MeshLambertMaterial({ color: 0xaa2222 });
-    for (const base of [[-180, -120], [180, -120], [-180, 120], [180, 120]]) {
-      const safeX = Math.max(-LAND_HALF, Math.min(LAND_HALF, base[0]));
-      const bz = base[1];
-      const nave = new THREE.Mesh(new THREE.BoxGeometry(22, 8, 14), matBrick);
-      nave.position.set(safeX, 4, bz); nave.castShadow = true; nave.receiveShadow = true; API.scene.add(nave);
-      const techo = new THREE.Mesh(new THREE.BoxGeometry(23, 0.6, 15), matRoof); techo.position.set(safeX, 8.3, bz); API.scene.add(techo);
-      const chim = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.0, 20, 10), matStack); chim.position.set(safeX + 8, 10, bz - 4); chim.castShadow = true; API.scene.add(chim);
-      const aro = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 1, 10), matRed); aro.position.set(safeX + 8, 18, bz - 4); API.scene.add(aro);
-      const smoke = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 6), new THREE.MeshLambertMaterial({ color: 0xcccccc, transparent: true, opacity: 0.55, depthWrite: false }));
-      smoke.position.set(safeX + 8, 21, bz - 4); API.scene.add(smoke);
-      mod.smokes.push({ mesh: smoke, baseY: 21, t: Math.random() * 6 });
-    }
-  }
-
-  // ===================== POSTES DE LUZ =====================
-  function addStreetLights() {
-    const matPost = new THREE.MeshLambertMaterial({ color: 0x333333 });
-    const matLamp = new THREE.MeshBasicMaterial({ color: 0xfff2b0 });
-    for (let i = -8; i <= 8; i++) {
-      for (const sx of [-8, 8]) {
-        const p = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 6, 6), matPost);
-        p.position.set(sx, 3, i * 22); API.scene.add(p);
-        const a = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.12), matPost);
-        a.position.set(sx + (sx > 0 ? -0.7 : 0.7), 5.9, i * 22); API.scene.add(a);
-        const l = new THREE.Mesh(new THREE.SphereGeometry(0.35, 6, 6), matLamp);
-        l.position.set(sx + (sx > 0 ? -1.3 : 1.3), 5.85, i * 22); API.scene.add(l);
-      }
-    }
   }
 
   // ===================== HQ =====================
@@ -1019,16 +570,13 @@
 
   // ===================== CREAR MUNDO =====================
   extendWorld();
-  hideBaseHouses();
   addClouds();
   addDistantMountains();
   addRiverAndBridges();
   patchWaterCollision();
   addIndustrialZone();
   addStreetLights();
-  replaceBaseHouses(); // ← reemplaza casas base con las nuestras
 
-  // Árboles
   function canPlaceTree(x, z) {
     if (Math.abs(x) > 128) return false;
     if (z > RIVER.zMin - 3 && z < RIVER.zMax + 3) return false;
@@ -1040,7 +588,6 @@
     if (Math.hypot(x - ENEMY_AIRPORT.x, z - ENEMY_AIRPORT.z) < 75) return false;
     if (Math.hypot(x - ALLY_HQ_POS.x, z - ALLY_HQ_POS.z) < 45) return false;
     if (Math.hypot(x - ENEMY_HQ_POS.x, z - ENEMY_HQ_POS.z) < 45) return false;
-    for (const h of mod.buildings) if (Math.hypot(x - h.x, z - h.z) < 8) return false;
     return true;
   }
   const treeZones = [
@@ -1057,14 +604,6 @@
     }
   }
   console.log(`🌳 Árboles: ${treeCount} colocados`);
-
-  // Edificios extra (además de las casas base reemplazadas)
-  const extraBuildings = [[-60, -60], [60, -60], [-60, 80], [60, 80]];
-  extraBuildings.forEach(([bx, bz], i) => {
-    if (Math.abs(bx) > 128) return;
-    if (inWater(bx, bz)) return;
-    buildHouse(bx, bz, (i + 2) % 4, [0xc8b8a0, 0xb8c8d0, 0xd0c0a0, 0xd8d2c4][i]);
-  });
 
   buildHQ('ally', ALLY_HQ_POS.x, ALLY_HQ_POS.z);
   buildHQ('enemy', ENEMY_HQ_POS.x, ENEMY_HQ_POS.z);
@@ -1368,44 +907,6 @@
         }
       }
       if (!consumed) {
-        for (const b of mod.buildings) {
-          if (b.state === 'destroyed') continue;
-          const minX = b.x - b.W/2 - 2, maxX = b.x + b.W/2 + 2;
-          const minZ = b.z - b.D/2 - 2, maxZ = b.z + b.D/2 + 2;
-          const inX = pPos.x > minX && pPos.x < maxX;
-          const inZ = pPos.z > minZ && pPos.z < maxZ;
-          const inXp = _prev.x > minX && _prev.x < maxX;
-          const inZp = _prev.z > minZ && _prev.z < maxZ;
-          if ((inX && inZ) || (inXp && inZp)) {
-            if (pPos.y < 4.5) {
-              let best = null, bd = 1e9;
-              for (const w of b.groundWalls) {
-                if (w.hp <= 0) continue;
-                const wx = b.x + w.pos[0], wz = b.z + w.pos[2];
-                const d = Math.hypot(pPos.x - wx, pPos.z - wz);
-                if (d < bd) { bd = d; best = w; }
-              }
-              if (best) { damageWall(b, best, pr.damage); shakeAmount = Math.max(shakeAmount, 0.4); consumed = true; }
-            } else if (pPos.y < 9) {
-              for (const uf of b.upperFloors) {
-                for (const w of uf.walls) {
-                  if (w.hp <= 0) continue;
-                  const wx = b.x + w.pos[0], wz = b.z + w.pos[2];
-                  const d = Math.hypot(pPos.x - wx, pPos.z - wz);
-                  if (d < 4.5) {
-                    w.hp -= pr.damage;
-                    if (w.hp <= 0) { w.mesh.visible = false; spawnDust(V(b.x + w.pos[0], uf.group.position.y + w.pos[1], b.z + w.pos[2])); }
-                    consumed = true; break;
-                  }
-                }
-                if (consumed) break;
-              }
-            }
-            if (consumed) break;
-          }
-        }
-      }
-      if (!consumed) {
         for (const t of mod.trees) {
           if (t.state !== 'alive') continue;
           const d = pPos.distanceTo(t.mesh.position);
@@ -1514,7 +1015,6 @@
     for (const p of mod.planes) { try { updatePlane(p, dt); } catch (e) { console.error('plane err', e); } }
     for (const h of mod.helis) { try { updateHeli(h, dt); } catch (e) { console.error('heli err', e); } }
     updateTrees(dt);
-    updateBuildings(dt);
     updateSmokes(dt);
     updateClouds(dt);
     updateDust(dt);
@@ -1525,6 +1025,6 @@
     applyShake(dt);
   };
 
-  window.MejoraMundo = { version: '4.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis, buildings: mod.buildings, trees: mod.trees };
-  console.log(`🌍 Mejora de Mundo v4.0 lista — ${mod.planes.length} cazas, ${mod.helis.length} helis, ${mod.buildings.length} edificios destruibles, ${mod.trees.length} árboles.`);
+  window.MejoraMundo = { version: '5.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis, trees: mod.trees };
+  console.log(`🌍 Mejora de Mundo v5.0 lista — ${mod.planes.length} cazas, ${mod.helis.length} helis, ${mod.trees.length} árboles. Casas en casas.js`);
 })();

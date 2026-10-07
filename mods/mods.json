@@ -2,6 +2,7 @@
   { "archivo": "pwa_offline.js",  "activo": true },
   { "archivo": "DLC.js",          "activo": true },
   { "archivo": "mejora_mundo.js", "activo": true },
+  { "archivo": "casas.js",        "activo": true },
   { "archivo": "camiones.js",     "activo": true },
   { "archivo": "ia_mejorada.js",  "activo": true }
 ]
