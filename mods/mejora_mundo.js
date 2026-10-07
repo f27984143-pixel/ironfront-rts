@@ -1,12 +1,12 @@
 /* ============================================================
-   MOD: Mejora de Mundo v2.0
-   - Río TRUNCADO (solo en tierra, x=-125..125) — ya no invade el mar
-   - Sin orillas de arena dentro del mar
-   - Árboles con filtro ESTRICTO anti-mar/anti-río
-   - Edificios DESTRUIBLES mejorados: grietas + fases + fuego
-   - Todo lo demás de la versión anterior
-   Usa window.ModelosHD si está disponible (DLC.js).
-   Uso: mods/mejora_mundo.js
+   MOD: Mejora de Mundo v3.0
+   - Río truncado (no invade el mar)
+   - Árboles con filtro estricto anti-mar
+   - Edificios 2 pisos destruibles (grietas + fases + fuego)
+   - Banking real (los aviones/heli se inclinan al girar)
+   - Crash cinematográfico al morir (espiral + humo + explosión)
+   - Cazas con ciclo de vuelo completo (aparcado → taxi → despegue → combate → aterrizaje)
+   Usa window.ModelosHD (DLC.js) para modelos y utilidades.
    ============================================================ */
 (function () {
   if (window.__WORLD_IMPROVE_LOADED) { console.warn('⚠️ Mejora de Mundo ya cargada'); return; }
@@ -18,8 +18,8 @@
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
 
-  console.log('🌍 Mod Mejora de Mundo v2.0: iniciando...');
-  API.say('🌍 Mejora de Mundo v2.0');
+  console.log('🌍 Mod Mejora de Mundo v3.0: iniciando...');
+  API.say('🌍 Mejora de Mundo v3.0');
 
   // ===================== CONSTANTES =====================
   const GROUND_Y = 1.0;
@@ -29,9 +29,7 @@
   const CRUISE_SPEED = 52;
   const APPROACH_DIST = 170;
   const WORLD_SIZE = 900;
-  // LÍMITES: el mar del juego base empieza en x=135 (SHORE)
-  const LAND_HALF = 125;              // límite del terreno transitable
-  const SEA_START_X = 133;            // un poco antes del mar real
+  const LAND_HALF = 125;
   const RIVER = { zMin: 42, zMax: 68, centerZ: 55, halfLen: LAND_HALF };
   const BRIDGES_X = [
     { xMin: -10,  xMax: 10  },
@@ -122,6 +120,34 @@
     return cur + diff * Math.min(1, dt * speed);
   }
   const yawFromDir = (dx, dz) => Math.atan2(dx, dz);
+
+  // Aplica banking (giro inclinado) si ModelosHD está disponible
+  function applyBanking(entity, targetYaw, dt, opts) {
+    if (window.ModelosHD && window.ModelosHD.computeBanking) {
+      const b = window.ModelosHD.computeBanking(entity.yaw, entity.roll || 0, targetYaw, dt, opts);
+      entity.yaw = b.yaw;
+      entity.roll = b.roll;
+      entity.mesh.rotation.y = entity.yaw;
+      entity.mesh.rotation.z = entity.roll;
+    } else {
+      // Fallback simple
+      entity.yaw = rotateSmooth(entity.yaw, targetYaw, dt, opts.turnRate || 3);
+      entity.mesh.rotation.y = entity.yaw;
+      entity.mesh.rotation.z = 0;
+    }
+  }
+
+  // Inicia crash si ModelosHD lo permite, si no hace muerte normal
+  function killEntity(entity, kind) {
+    if (entity.crashing) return;
+    if (window.ModelosHD && window.ModelosHD.startCrash) {
+      window.ModelosHD.startCrash(entity, kind);
+    } else {
+      entity.isDead = true;
+      entity.respawnTimer = 0;
+      API.playSound('explosion');
+    }
+  }
 
   // ===================== PARTÍCULAS =====================
   const dustMat = new THREE.MeshBasicMaterial({ color: 0xbbaa88, transparent: true, opacity: 0.85, depthWrite: false });
@@ -231,10 +257,9 @@
     API.scene.add(g);
   }
 
-  // ===================== RÍO TRUNCADO (solo en tierra) =====================
+  // ===================== RÍO + PUENTES =====================
   function addRiverAndBridges() {
-    // ⚠️ CRÍTICO: el río SOLO va de -LAND_HALF a +LAND_HALF (no invade el mar)
-    const L = RIVER.halfLen * 2;   // 250
+    const L = RIVER.halfLen * 2;
     const river = new THREE.Mesh(
       new THREE.PlaneGeometry(L, RIVER.zMax - RIVER.zMin),
       new THREE.MeshLambertMaterial({ color: 0x2a6fa8, transparent: true, opacity: 0.88 })
@@ -242,8 +267,6 @@
     river.rotation.x = -Math.PI / 2;
     river.position.set(0, 0.07, RIVER.centerZ);
     API.scene.add(river);
-
-    // Orillas de arena (también truncadas al terreno)
     for (const zo of [RIVER.zMin - 1.5, RIVER.zMax + 1.5]) {
       const bank = new THREE.Mesh(new THREE.PlaneGeometry(L, 3),
         new THREE.MeshLambertMaterial({ color: 0xd9c68f }));
@@ -252,7 +275,6 @@
       API.scene.add(bank);
     }
 
-    // Puentes
     const matDeck = new THREE.MeshLambertMaterial({ color: 0x3a3a3a });
     const matRieles = new THREE.MeshLambertMaterial({ color: 0x8a8a8a });
     const matPilar = new THREE.MeshLambertMaterial({ color: 0x6a6a5a });
@@ -291,10 +313,10 @@
       }
       API.scene.add(br);
     }
-    console.log(`🌉 Río truncado a x=[${-RIVER.halfLen},${RIVER.halfLen}] + 3 puentes`);
+    console.log(`🌉 Río truncado + 3 puentes`);
   }
 
-  // ===================== ÁRBOL DESTRUCTIBLE =====================
+  // ===================== ÁRBOL =====================
   function addTree(x, z) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
@@ -339,7 +361,7 @@
     }
   }
 
-  // ===================== EDIFICIO 2 PISOS CON DESTRUCCIÓN v2 =====================
+  // ===================== EDIFICIO 2 PISOS =====================
   function addBuilding(x, z, colorHue) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
@@ -418,41 +440,34 @@
     return b;
   }
 
-  // === DESTRUCCIÓN v2: feedback visual + grietas ===
   function damageWall(b, wall, dmg) {
     if (wall.hp <= 0) return;
     wall.hp -= dmg;
     const ratio = Math.max(0, wall.hp / wall.maxHp);
 
-    // Feedback: enrojecer/oscurecer
     if (wall.mesh.material && wall.mesh.material.color) {
       const c = wall.mesh.material.color;
       c.r = Math.min(1, c.r * 0.85 + 0.15 + (1 - ratio) * 0.15);
       c.g = Math.max(0, c.g * (0.75 + ratio * 0.15));
       c.b = Math.max(0, c.b * (0.75 + ratio * 0.15));
     }
-    // Temblor corto
     wall.mesh.position.y = wall.pos[1] + (Math.random() - 0.5) * 0.15;
 
-    // Chispas
     spawnDust(V(
       b.x + wall.pos[0] + (Math.random() - 0.5) * 3,
       wall.pos[1] + (Math.random() - 0.5) * 2,
       b.z + wall.pos[2] + (Math.random() - 0.5) * 3
     ));
 
-    // Grietas visibles al bajar de 40%
     if (ratio < 0.4 && !wall.cracked) {
       wall.cracked = true;
       const crackMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a, transparent: true, opacity: 0.7 });
       for (let i = 0; i < 3; i++) {
         const crack = new THREE.Mesh(new THREE.PlaneGeometry(rnd(0.3, 0.8), rnd(1, 2)), crackMat);
         if (Math.abs(wall.pos[0]) > 0.1) {
-          // Pared lateral (X)
           crack.position.set(wall.pos[0] + (wall.pos[0] > 0 ? 0.26 : -0.26), wall.pos[1] + rnd(-1, 1), wall.pos[2] + rnd(-2, 2));
           crack.rotation.y = Math.PI / 2;
         } else {
-          // Pared frontal/trasera (Z)
           crack.position.set(wall.pos[0] + rnd(-2, 2), wall.pos[1] + rnd(-1, 1), wall.pos[2] + (wall.pos[2] > 0 ? 0.26 : -0.26));
         }
         crack.rotation.z = rnd(-0.5, 0.5);
@@ -486,13 +501,11 @@
         b.collapseT += dt;
         const t = b.collapseT;
 
-        // FASE 1 (0-0.4s): temblor
         if (t < 0.4) {
           b.upperFloor.position.x = Math.sin(t * 80) * 0.08;
           b.upperFloor.position.z = Math.cos(t * 70) * 0.08;
           if (Math.random() < 0.4) spawnDust(V(b.x + rnd(-2, 2), 4, b.z + rnd(-2, 2)));
 
-        // FASE 2 (0.4-1.4s): caída inicial
         } else if (t < 1.4) {
           const k = (t - 0.4);
           const ease = k * k;
@@ -504,7 +517,6 @@
           if (Math.random() < 0.6) spawnFlyingDebris(V(b.x + rnd(-3, 3), rnd(3, 6), b.z + rnd(-3, 3)), 1);
           if (Math.random() < 0.5) spawnDust(V(b.x + rnd(-3, 3), 3, b.z + rnd(-3, 3)));
 
-        // FASE 3 (1.4-2.4s): colapso final
         } else if (t < 2.4) {
           const k = (t - 1.4);
           const ease = k * k;
@@ -514,7 +526,6 @@
           if (Math.random() < 0.7) spawnFlyingDebris(V(b.x + rnd(-4, 4), rnd(2, 5), b.z + rnd(-4, 4)), 2);
           if (Math.random() < 0.6) spawnDust(V(b.x + rnd(-4, 4), 1.5, b.z + rnd(-4, 4)));
 
-        // FASE 4: escombros + fuego
         } else {
           b.state = 'destroyed';
           spawnSmokePlume(V(b.x, 1, b.z));
@@ -522,7 +533,6 @@
           b.upperFloor.visible = false;
           b.groundFloor.visible = false;
 
-          // Escombros persistentes
           const rubbleMat = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
           const rubbleMat2 = new THREE.MeshLambertMaterial({ color: 0x4a3a2a });
           for (let i = 0; i < 30; i++) {
@@ -538,7 +548,6 @@
             b.rubble.push(r);
           }
 
-          // Fuego parpadeante
           b.fires = [];
           for (let i = 0; i < 3; i++) {
             const fire = new THREE.Mesh(
@@ -560,7 +569,6 @@
         }
       }
 
-      // Fuego + humo continuos
       if (b.state === 'destroyed' && b.fires) {
         for (const f of b.fires) {
           f.t += dt;
@@ -586,7 +594,6 @@
 
   // ===================== COLISIÓN DE AGUA =====================
   function inWater(x, z) {
-    // Río del mod (solo en tierra)
     if (z >= RIVER.zMin && z <= RIVER.zMax && Math.abs(x) <= RIVER.halfLen) {
       for (const b of BRIDGES_X) if (x >= b.xMin && x <= b.xMax) return false;
       return true;
@@ -600,20 +607,18 @@
       if (inWater(pos.x, pos.z)) return true;
       return _orig(pos, radius);
     };
-    console.log('💧 Colisión de agua activada (río truncado)');
+    console.log('💧 Colisión de agua activada');
   }
 
   // ===================== ZONA INDUSTRIAL =====================
   function addIndustrialZone() {
     const matBrick = new THREE.MeshLambertMaterial({ color: 0x8a5a4a });
-    const matConc  = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
     const matRoof  = new THREE.MeshLambertMaterial({ color: 0x4a4a4a });
     const matStack = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
     const matRed   = new THREE.MeshLambertMaterial({ color: 0xaa2222 });
     for (const base of [[-180, -120], [180, -120], [-180, 120], [180, 120]]) {
-      const bx = base[0], bz = base[1];
-      // Evitar mar (x > 130) — mover las industrias hacia dentro si hace falta
-      const safeX = Math.max(-LAND_HALF, Math.min(LAND_HALF, bx));
+      const safeX = Math.max(-LAND_HALF, Math.min(LAND_HALF, base[0]));
+      const bz = base[1];
       const nave = new THREE.Mesh(new THREE.BoxGeometry(22, 8, 14), matBrick);
       nave.position.set(safeX, 4, bz); nave.castShadow = true; nave.receiveShadow = true; API.scene.add(nave);
       const techo = new THREE.Mesh(new THREE.BoxGeometry(23, 0.6, 15), matRoof); techo.position.set(safeX, 8.3, bz); API.scene.add(techo);
@@ -775,14 +780,12 @@
   // ===================== USAR MODELOS HD =====================
   function getPlaneMesh(color) {
     if (window.ModelosHD && window.ModelosHD.plane) return window.ModelosHD.plane(color);
-    console.warn('⚠️ ModelosHD no disponible, usando cubo básico');
     const g = new THREE.Group();
     g.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1.5, 8), new THREE.MeshLambertMaterial({ color })));
     return g;
   }
   function getHeliMesh(color) {
     if (window.ModelosHD && window.ModelosHD.heli) return window.ModelosHD.heli(color);
-    console.warn('⚠️ ModelosHD no disponible, usando cubo básico');
     const g = new THREE.Group();
     g.add(new THREE.Mesh(new THREE.BoxGeometry(2.5, 2, 6), new THREE.MeshLambertMaterial({ color })));
     const rM = new THREE.Group();
@@ -829,7 +832,7 @@
       isDead: false, respawnTimer: 0, basePos: V(x, 20, z),
       cooldown: 0, missileCooldown: 0,
       rotorMain: result.rotorMain, rotorTail: result.rotorTail, turret: result.turret,
-      yaw: 0, strafeTimer: Math.random() * 6, patrolAngle: Math.random() * Math.PI * 2,
+      yaw: 0, roll: 0, strafeTimer: Math.random() * 6, patrolAngle: Math.random() * Math.PI * 2,
     };
     unit.mesh.rotation.order = 'YXZ';
     unit.mesh.position.copy(unit.basePos);
@@ -847,32 +850,24 @@
   addIndustrialZone();
   addStreetLights();
 
-  // ===================== ÁRBOLES (FILTRO ESTRICTO) =====================
+  // Filtro estricto para árboles
   function canPlaceTree(x, z) {
-    // Regla 1: NO en el mar (x > 130 o x < -130)
     if (Math.abs(x) > 128) return false;
-    // Regla 2: NO en el río del mod
     if (z > RIVER.zMin - 3 && z < RIVER.zMax + 3) return false;
-    // Regla 3: NO en el centro
     if (Math.abs(x) < 30 && Math.abs(z) < 30) return false;
-    // Regla 4: NO en carreteras del juego base
-    if (Math.abs(x) < 10 && Math.abs(z) < 200) return false;            // carretera vertical x=0
-    if (Math.abs(x + 37.5) < 9 && Math.abs(z) < 180) return false;      // carretera horizontal x=-37.5
-    if (Math.abs(z) < 10 && Math.abs(x) < 200) return false;            // carreteras horizontales z=0
-    // Regla 5: NO en aeropuertos
+    if (Math.abs(x) < 10 && Math.abs(z) < 200) return false;
+    if (Math.abs(x + 37.5) < 9 && Math.abs(z) < 180) return false;
+    if (Math.abs(z) < 10 && Math.abs(x) < 200) return false;
     if (Math.hypot(x - ALLY_AIRPORT.x, z - ALLY_AIRPORT.z) < 75) return false;
     if (Math.hypot(x - ENEMY_AIRPORT.x, z - ENEMY_AIRPORT.z) < 75) return false;
-    // Regla 6: NO en cuarteles
     if (Math.hypot(x - ALLY_HQ_POS.x, z - ALLY_HQ_POS.z) < 45) return false;
     if (Math.hypot(x - ENEMY_HQ_POS.x, z - ENEMY_HQ_POS.z) < 45) return false;
-    // Regla 7: NO en zona industrial
     for (const base of [[-180, -120], [180, -120], [-180, 120], [180, 120]]) {
       if (Math.hypot(x - base[0], z - base[1]) < 30) return false;
     }
     return true;
   }
 
-  // Zonas donde buscar árboles (dentro de tierra)
   const treeZones = [
     [-110, -90], [110, -90], [-110, -130], [110, -130],
     [-110, 100], [110, 100], [-110, 130], [110, 130],
@@ -886,15 +881,14 @@
       if (canPlaceTree(x, z)) { addTree(x, z); treeCount++; }
     }
   }
-  console.log(`🌳 Árboles destructibles: ${treeCount} colocados (fuera de agua, carreteras, aeropuertos, HQ)`);
+  console.log(`🌳 Árboles: ${treeCount} colocados`);
 
-  // Edificios 2 pisos
   const buildingsPositions = [
     [-120, -50], [-120, 100], [120, -50], [120, 100],
     [-40, -30], [40, -30], [-40, 140], [40, 140],
   ];
   for (const [bx, bz] of buildingsPositions) {
-    if (Math.abs(bx) > 128) continue;  // no en el mar
+    if (Math.abs(bx) > 128) continue;
     addBuilding(bx, bz, 0xd8d2c4);
   }
 
@@ -922,10 +916,14 @@
     p.mesh.position.copy(p.apron); p.mesh.position.y = GROUND_Y;
     const dx = p.rw.takeoffStart.x - p.apron.x, dz = p.rw.takeoffStart.z - p.apron.z;
     p.yaw = yawFromDir(dx, dz);
+    p.roll = 0;
     p.mesh.rotation.set(0, p.yaw, 0);
   }
 
   function updatePlane(p, dt) {
+    // Si está crasheando, no procesar (lo maneja DLC.js)
+    if (p.crashing) return;
+
     if (p.isDead) {
       p.respawnTimer += dt; p.mesh.visible = false;
       if (p.hpGroup) p.hpGroup.visible = false;
@@ -992,8 +990,11 @@
         const wp = p.rw.approach.clone(); wp.y = CRUISE_ALT;
         const r = stepToward(p.mesh.position, wp, CRUISE_SPEED * dt);
         const dx = wp.x - p.mesh.position.x, dz = wp.z - p.mesh.position.z;
-        if (Math.abs(dx) + Math.abs(dz) > 1) p.yaw = rotateSmooth(p.yaw, yawFromDir(dx, dz), dt, 3);
-        p.mesh.rotation.set(0, p.yaw, 0);
+        if (Math.abs(dx) + Math.abs(dz) > 1) {
+          // BANKING
+          const yawT = yawFromDir(dx, dz);
+          applyBanking(p, yawT, dt, { maxBank: 0.9, turnRate: 2.5, rollSpeed: 4 });
+        }
         p.mesh.position.y = CRUISE_ALT;
         for (const f of p.flames) f.visible = true;
         if (r.distance < 5) { p.state = 'approach'; p.approachStart = p.mesh.position.clone(); p.approachT = 0; }
@@ -1078,12 +1079,12 @@
     if (dist > 0.5) {
       dir.normalize();
       p.mesh.position.addScaledVector(dir, Math.min(CRUISE_SPEED * dt, dist));
+      // BANKING
       const yawT = yawFromDir(dir.x, dir.z);
-      p.yaw = rotateSmooth(p.yaw, yawT, dt, 4);
-      let yd = yawT - p.yaw;
-      while (yd >  Math.PI) yd -= 2 * Math.PI;
-      while (yd < -Math.PI) yd += 2 * Math.PI;
-      p.mesh.rotation.set(-dir.y * 0.4, p.yaw, -yd * 1.2);
+      applyBanking(p, yawT, dt, { maxBank: 1.0, turnRate: 2.8, rollSpeed: 4.5 });
+      // Pitch proporcional al ascenso/descenso
+      p.pitch = (p.pitch || 0) + ((-dir.y * 0.5) - (p.pitch || 0)) * Math.min(1, dt * 3);
+      p.mesh.rotation.x = p.pitch;
     }
     for (const f of p.flames) { f.visible = true; f.scale.setScalar(0.7 + Math.random() * 0.6); }
     if (target && p.cooldown <= 0 && tDist < 160) {
@@ -1097,11 +1098,16 @@
       API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xff6600, 60, p.team);
       API.playSound('explosion'); p.missileCooldown = 3.5;
     }
-    if (p.hp <= 0) { p.isDead = true; p.respawnTimer = 0; API.playSound('explosion'); }
+    if (p.hp <= 0) {
+      killEntity(p, 'plane');
+    }
   }
 
   // ===================== HELI UPDATE =====================
   function updateHeli(h, dt) {
+    // Si está crasheando, no procesar
+    if (h.crashing) return;
+
     if (h.isDead) {
       h.respawnTimer += dt; h.mesh.visible = false;
       if (h.hpGroup) h.hpGroup.visible = false;
@@ -1159,9 +1165,8 @@
       dir.normalize();
       h.mesh.position.addScaledVector(dir, Math.min(h.speed * dt, dist));
       const yawT = yawFromDir(dir.x, dir.z);
-      h.yaw = rotateSmooth(h.yaw, yawT, dt, 3);
-      h.mesh.rotation.y = h.yaw;
-      h.mesh.rotation.z = -0.6 * (yawT - h.yaw);
+      // BANKING helicópteros (más pronunciado)
+      applyBanking(h, yawT, dt, { maxBank: 1.3, turnRate: 3.5, rollSpeed: 5 });
     }
     if (h.turret) {
       const tgtPos = target ? target.mesh.position : (gt ? gt.mesh.position : null);
@@ -1184,7 +1189,9 @@
       API.fireProjectile(h.mesh.position.clone(), target.mesh.position.clone(), 0xff4400, 70, h.team);
       API.playSound('explosion'); h.missileCooldown = 4;
     }
-    if (h.hp <= 0) { h.isDead = true; h.respawnTimer = 0; API.playSound('explosion'); }
+    if (h.hp <= 0) {
+      killEntity(h, 'heli');
+    }
   }
 
   // ===================== DAÑO =====================
@@ -1199,7 +1206,7 @@
       let consumed = false;
 
       for (const u of targets) {
-        if (u.isDead || u.team === pr.team) continue;
+        if (u.isDead || u.crashing || u.team === pr.team) continue;
         const r = (u.radius || 4) + 2;
         if (pPos.distanceTo(u.mesh.position) < r) {
           u.hp -= pr.damage; shakeAmount = Math.max(shakeAmount, 0.6);
@@ -1326,7 +1333,7 @@
     }
     let airborne = 0;
     for (const p of mod.planes) {
-      if (!p.isDead && p.state !== 'parked' && p.state !== 'taxi_out' && p.state !== 'taxi_in' && p.state !== 'takeoff' && p.state !== 'rollout') airborne++;
+      if (!p.isDead && !p.crashing && p.state !== 'parked' && p.state !== 'taxi_out' && p.state !== 'taxi_in' && p.state !== 'takeoff' && p.state !== 'rollout') airborne++;
     }
     const el = document.getElementById('hq-airborne');
     if (el) el.textContent = airborne;
@@ -1369,6 +1376,6 @@
     applyShake(dt);
   };
 
-  window.MejoraMundo = { version: '2.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis, buildings: mod.buildings, trees: mod.trees };
-  console.log(`🌍 Mejora de Mundo v2.0 lista — ${mod.planes.length} cazas, ${mod.helis.length} helis, ${mod.buildings.length} edificios, ${mod.trees.length} árboles.`);
+  window.MejoraMundo = { version: '3.0', hqs: mod.hqs, planes: mod.planes, helis: mod.helis, buildings: mod.buildings, trees: mod.trees };
+  console.log(`🌍 Mejora de Mundo v3.0 lista — ${mod.planes.length} cazas, ${mod.helis.length} helis, ${mod.buildings.length} edificios, ${mod.trees.length} árboles.`);
 })();
