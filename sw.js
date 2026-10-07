@@ -1,22 +1,29 @@
-const CACHE = 'ironfront-v1';
+/* ============================================================
+   SERVICE WORKER — Ironfront RTS
+   - Mods y HTML: network-first (se actualizan solos con internet)
+   - CDNs y estáticos: cache-first (rápido y offline)
+   ============================================================ */
+const CACHE = 'ironfront-v2';
 
 const PRECACHE = [
   './',
   './index.html',
   './manifest.json',
   './icon.svg',
-  './modificaciones/mods.json',
-  './modificaciones/pwa_offline.js',
-  './modificaciones/camiones.js',
-  './modificaciones/aire_conquista.js',
+  './mods/mods.json',
+  './mods/pwa_offline.js',
+  './mods/DLC.js',
+  './mods/mejora_mundo.js',
+  './mods/casas.js',
+  './mods/ia_mejorada.js',
   'https://cdn.tailwindcss.com',
   'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
 ];
 
 const NETWORK_FIRST = [
-  /modificaciones\/.*\.(js|json)$/i,
+  /mods\/.*\.(js|json)$/i,
+  /modificaciones\/.*\.(js|json)$/i,   // compatibilidad si algún día vuelve el nombre
   /\/index\.html$/i,
-  /\/mods\/.*\.(js|json)$/i,
 ];
 
 self.addEventListener('install', e => {
@@ -40,12 +47,16 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
+
+  // GitHub API: siempre red, fallback vacío
   if (req.url.includes('api.github.com')) {
     e.respondWith(fetch(req).catch(() =>
       new Response('[]', { headers: { 'Content-Type': 'application/json' } })));
     return;
   }
+
   const isNetworkFirst = NETWORK_FIRST.some(rx => rx.test(req.url));
+
   if (isNetworkFirst) {
     e.respondWith(
       fetch(new Request(req, { cache: 'no-store' }))
@@ -60,6 +71,8 @@ self.addEventListener('fetch', e => {
     );
     return;
   }
+
+  // Cache-first para todo lo demás (CDNs, imágenes, etc.)
   e.respondWith(
     caches.match(req).then(hit => hit || fetch(req).then(resp => {
       if (resp && (resp.status === 200 || resp.type === 'opaque')) {
@@ -73,4 +86,7 @@ self.addEventListener('fetch', e => {
 
 self.addEventListener('message', e => {
   if (e.data === 'SKIP_WAITING') self.skipWaiting();
+  if (e.data === 'CLEAR_CACHE') {
+    caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k))));
+  }
 });
