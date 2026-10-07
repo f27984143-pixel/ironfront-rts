@@ -1,7 +1,7 @@
 /* ============================================================
-   MOD: Modelos HD + IA de Vuelo v3.1
-   - Fix: preservar userData al reemplazar meshes (para que las
-     unidades sigan siendo seleccionables/controlables)
+   MOD: Modelos HD + IA de Vuelo v3.2
+   - Fix: preservar userData al reemplazar meshes
+   - Fix: NO reemplazar artillería de ia_mejorada.js (isArtilleria)
    ============================================================ */
 (function () {
   if (window.__HD_MODELS_LOADED) { console.warn('⚠️ Modelos HD ya cargados'); return; }
@@ -13,8 +13,8 @@
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
 
-  console.log('🎨 Mod Modelos HD v3.1: iniciando...');
-  API.say('🎨 Modelos HD v3.1');
+  console.log('🎨 Mod Modelos HD v3.2: iniciando...');
+  API.say('🎨 Modelos HD v3.2');
 
   const MAT = {
     dark:   new THREE.MeshLambertMaterial({ color: 0x1a1a1a }),
@@ -313,7 +313,7 @@
 
   // API PÚBLICA
   window.ModelosHD = {
-    version: '3.1',
+    version: '3.2',
     plane: (c) => buildPlane(c),
     heli: (c) => buildHeli(c),
     tank: (c) => buildTank(c),
@@ -324,7 +324,7 @@
     crashFX,
   };
 
-  // ⚠️ FIX CRÍTICO: preservar userData en TODOS los submeshes
+  // Preservar userData en TODOS los submeshes
   function tagUserData(group, unit) {
     group.traverse(c => { if (c.isMesh) c.userData = unit; });
   }
@@ -352,7 +352,7 @@
         h.mesh = result.group;
         h.rotor = result.rotorMain;
         h.yaw = oldRotY; h.roll = 0; h.pitch = 0;
-        tagUserData(result.group, h); // ← FIX
+        tagUserData(result.group, h);
         count++;
       } catch (e) { console.error('Error upgrading heli:', e); }
     }
@@ -381,7 +381,7 @@
         API.scene.add(result.group);
         t.mesh = result.group;
         t.turret = result.turret;
-        tagUserData(result.group, t); // ← FIX
+        tagUserData(result.group, t);
         count++;
       } catch (e) { console.error('Error upgrading tank:', e); }
     }
@@ -394,6 +394,8 @@
     for (const v of API.vehicles) {
       try {
         if (v.type !== 'apc') continue;
+        // ⚠️ FIX CRÍTICO: NO reemplazar la artillería creada por ia_mejorada.js
+        if (v.isArtilleria) continue;
         const oldMesh = v.mesh; if (!oldMesh) continue;
         const oldPos = oldMesh.position.clone();
         const oldRotY = oldMesh.rotation.y;
@@ -411,7 +413,7 @@
         API.scene.add(result.group);
         v.mesh = result.group;
         v.turret = result.turret;
-        tagUserData(result.group, v); // ← FIX
+        tagUserData(result.group, v);
         count++;
       } catch (e) { console.error('Error upgrading APC:', e); }
     }
@@ -451,5 +453,5 @@
     }
   };
 
-  console.log('🎨 Mod Modelos HD v3.1 listo (userData preservado)');
+  console.log('🎨 Mod Modelos HD v3.2 listo (artillería preservada)');
 })();
