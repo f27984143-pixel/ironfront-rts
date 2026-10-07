@@ -3,11 +3,12 @@
    - Mods y HTML: network-first (se actualizan solos con internet)
    - CDNs y estáticos: cache-first (rápido y offline)
    ============================================================ */
-const CACHE = 'ironfront-v2';
+const CACHE = 'ironfront-v3';
 
 const PRECACHE = [
   './',
   './index.html',
+  './game.js',
   './manifest.json',
   './icon.svg',
   './mods/mods.json',
