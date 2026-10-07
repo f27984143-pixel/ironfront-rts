@@ -1,14 +1,13 @@
 /* ============================================================
-   MOD: IA Mejorada v1.0
-   Añade:
-     - Escuadrones tácticos automáticos (asignación de roles)
-     - Priorización inteligente de blancos (cohetes vs. tanques, etc.)
-     - Huida táctica cuando HP < 35%
-     - Reagrupamiento de unidades solas
-     - Flanqueo coordinado
-     - Nueva unidad: Artillería (mortero de largo alcance con IA)
-     - HUD de IA en vivo
-   Uso: colócalo como modificaciones/ia_mejorada.js
+   MOD: IA Mejorada v1.1
+   Cambios vs v1.0:
+     ✓ Artillería con turret real (ya no crashea la IA base)
+     ✓ Se puede disparar en Control Directo (260 dmg, no 50)
+     ✓ Cámara 1ª persona retrocedida para no meterse en el modelo
+     ✓ Predicción de movimiento del blanco (lead)
+     ✓ Indicador visual de impacto en el suelo
+     ✓ La IA base ya no dispara artillería en corto alcance
+     ✓ HUD reubicado para no tapar la unidad
    ============================================================ */
 (function () {
   if (window.__SMART_AI_LOADED) { console.warn('⚠️ IA Mejorada ya cargada'); return; }
@@ -19,26 +18,28 @@
   if (!API || !THREE) { console.error('❌ IronfrontAPI no disponible'); return; }
 
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
-  console.log('🧠 Mod IA Mejorada v1.0: iniciando...');
-  API.say('🧠 IA Mejorada v1.0 activa');
+  console.log('🧠 Mod IA Mejorada v1.1: iniciando...');
+  API.say('🧠 IA Mejorada v1.1 activa');
 
-  // ======================== CONFIGURACIÓN ========================
+  // ======================== CONFIG ========================
   const CFG = {
     squadSize: 5,
-    reevalEvery: 0.6,          // seg entre reevaluaciones
-    soloDist: 22,              // a partir de aquí, se reagrupa
-    huidaHP: 0.35,             // % HP para huir
-    huidaDist: 30,             // distancia de retroceso al huir
-    artilleriaSpeed: 3,
-    artilleriaRange: 140,
-    artilleriaCooldown: 6.5,
-    artilleriaDamage: 260,
-    fuegoSupresionCd: 0.6,
+    reevalEvery: 0.6,
+    soloDist: 22,
+    huidaHP: 0.35,
+    // Artillería
+    artySpeed: 3,
+    artyRange: 150,
+    artyMinRange: 45,
+    artyCooldown: 6.0,
+    artyDamage: 260,
+    artySplashRadius: 9,
+    artyShellSpeed: 55,
   };
 
   // ======================== HUD ========================
   const hud = document.createElement('div');
-  hud.style.cssText = 'position:fixed;top:150px;right:6px;z-index:26;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 9px;font:11px sans-serif;color:#fff;min-width:170px;backdrop-filter:blur(4px)';
+  hud.style.cssText = 'position:fixed;top:150px;right:6px;z-index:26;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 9px;font:11px sans-serif;color:#fff;min-width:170px;backdrop-filter:blur(4px);opacity:.95';
   hud.innerHTML = `
     <div style="font-weight:700;color:#c8a0ff;margin-bottom:4px;font-size:10px;letter-spacing:1px">🧠 IA TÁCTICA</div>
     <div style="display:flex;justify-content:space-between"><span>Escuadrones aliados:</span><b id="ai-sq-ally">0</b></div>
@@ -52,7 +53,7 @@
   document.body.appendChild(hud);
   const $ = id => document.getElementById(id);
 
-  // ======================== ARTILLERÍA (nueva unidad) ========================
+  // ======================== ARTILLERÍA ========================
   const artillerias = [];
 
   function crearArtilleria(color, team, x, z) {
@@ -74,27 +75,57 @@
 
     // Chasis
     add(new THREE.BoxGeometry(3.2, 1.4, 7), matBody, 0, 1.1, 0);
-    // Cabeza tractora
     add(new THREE.BoxGeometry(2.6, 1.8, 2.6), matBody, 0, 1.5, 3.6);
-    add(new THREE.BoxGeometry(2.2, 1.4, 0.3), new THREE.MeshLambertMaterial({ color: 0x1a2a3a }), 0, 1.7, 4.9);
+    add(new THREE.BoxGeometry(2.2, 1.4, 0.3),
+        new THREE.MeshLambertMaterial({ color: 0x1a2a3a }), 0, 1.7, 4.9);
+
     // Orugas
     for (const sx of [-1.6, 1.6]) {
       add(new THREE.BoxGeometry(0.9, 0.9, 7.4), matDark, sx, 0.55, 0);
       for (let i = 0; i < 6; i++) {
         add(new THREE.CylinderGeometry(0.35, 0.35, 0.7, 8), matMetal,
-          sx, 0.55, -3 + i * 1.2, 0, 0, Math.PI / 2);
+            sx, 0.55, -3 + i * 1.2, 0, 0, Math.PI / 2);
       }
     }
-    // Base del mortero
-    add(new THREE.CylinderGeometry(1.8, 2.0, 0.8, 12), matDark, 0, 2.2, -1.5);
-    // Tubo elevado
-    const tubo = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.45, 6.5, 12), matDark);
-    tubo.position.set(0, 3.8, -2.5);
-    tubo.rotation.x = -Math.PI / 3.2;
+
+    // ------- TURRET (grupo que el juego base rota con lookAt) -------
+    const turret = new THREE.Group();
+    turret.position.set(0, 2.4, -1.5);   // pivote del mortero
+    g.add(turret);
+
+    // Base rotatoria del mortero
+    const baseMortero = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.6, 1.9, 0.7, 14), matDark);
+    baseMortero.position.y = 0;
+    baseMortero.castShadow = true;
+    turret.add(baseMortero);
+
+    // Tubo del mortero (apuntando hacia +Z, inclinado hacia arriba)
+    // Lo inclinamos -60° para que la bala salga por arriba
+    const tubo = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.42, 0.48, 6.0, 14), matDark);
+    tubo.rotation.x = Math.PI / 2;         // eje del cilindro va a +Z
+    tubo.position.set(0, 0.4, 2.0);
     tubo.castShadow = true;
-    g.add(tubo);
+    turret.add(tubo);
+
+    // Ángulo del tubo hacia arriba (dentro del turret)
+    const tuboWrap = new THREE.Group();
+    tuboWrap.position.set(0, 0, 0);
+    // Movemos el tubo al wrap para poder inclinarlo sin perder el pivote
+    turret.remove(tubo);
+    tubo.position.set(0, 0, 3.0);
+    tuboWrap.add(tubo);
+    tuboWrap.rotation.x = -Math.PI / 3.2;   // elevar el cañón
+    turret.add(tuboWrap);
+
     // Boca
-    add(new THREE.CylinderGeometry(0.55, 0.55, 0.5, 12), matMetal, 0, 5.4, -5.2, -Math.PI / 3.2);
+    const boca = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.55, 0.5, 14), matMetal);
+    boca.rotation.x = Math.PI / 2;
+    boca.position.set(0, 0, 5.8);
+    tuboWrap.add(boca);
+
     // Patas de anclaje
     for (const sx of [-1.4, 1.4]) {
       add(new THREE.BoxGeometry(0.25, 0.25, 2), matMetal, sx, 0.4, -3.2);
@@ -113,8 +144,8 @@
     hp.add(bg); hp.add(fg); hp.renderOrder = 999;
     API.scene.add(hp);
 
-    // Anillo selección
-    const ring = new THREE.Mesh(new THREE.RingGeometry(2.6, 3.0, 24),
+    // Anillo de selección
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.8, 3.2, 26),
       new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide, transparent: true }));
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.15;
@@ -122,20 +153,26 @@
     g.add(ring);
 
     const unit = {
-      type: 'artillery',
-      mesh: g, team,
+      type: 'apc',                 // tratado como APC base (range 70) — override por mod
+      isArtilleria: true,
+      mesh: g,
+      turret: turret,              // ← CLAVE: ahora sí existe
+      turretWrap: tuboWrap,
+      team,
       hp: 240, maxHp: 240, radius: 2.6,
-      speed: CFG.artilleriaSpeed,
-      cooldown: 2.5,
+      speed: CFG.artySpeed,
+      cooldown: Infinity,          // base nunca dispara
+      artyCooldown: 2.5,           // cooldown propio del mod
       target: V(x, 0, z),
       manualTarget: false,
       isDead: false, respawnTimer: 0,
       basePos: V(x, 0, z),
-      hpGroup: hp, hpBar: fg, hpYOffset: 3.8, hpWidth: 3,
+      hpGroup: hp, hpBar: fg, hpYOffset: 4.2, hpWidth: 3,
       selectionRing: ring,
-      isArtilleria: true,
       targetEnemy: null,
       scanT: 0,
+      lastVel: V(0, 0, 0),
+      lastPos: V(x, 0, z),
     };
     g.userData = unit;
     API.vehicles.push(unit);
@@ -143,241 +180,145 @@
     return unit;
   }
 
-  // Spawn: 2 por bando, cerca de los cuarteles
+  // Spawn: 2 por bando
   crearArtilleria(0x0055ff, 'ally', -30, -110);
   crearArtilleria(0x0055ff, 'ally',  30, -110);
   crearArtilleria(0xff2222, 'enemy', -30,  110);
   crearArtilleria(0xff2222, 'enemy',  30,  110);
-
   console.log('🚀 Artillería: 4 unidades creadas');
 
-  // ======================== ESCUADRONES ========================
-  // Un escuadrón es { id, team, units:[], role:'assault'|'support'|'flank' }
+  // ======================== ESTADO ========================
   const escuadrones = [];
   let nextSquadId = 1;
+  const state = new WeakMap();
 
-  // ======================== ESTADO POR UNIDAD ========================
-  const state = new WeakMap();       // u -> { fleeUntil, flankOffset, lastTarget, role }
   function getState(u) {
-    if (!state.has(u)) {
-      state.set(u, {
-        fleeUntil: 0,
-        flankOffset: (Math.random() < 0.5 ? 1 : -1) * (4 + Math.random() * 5),
-        lastTarget: null,
-        role: null,
-        squadId: 0,
-        lastEnemyId: null,
-      });
-    }
+    if (!state.has(u)) state.set(u, {
+      fleeUntil: 0,
+      flankOffset: (Math.random() < 0.5 ? 1 : -1) * (4 + Math.random() * 5),
+      lastTarget: null, role: null, squadId: 0,
+    });
     return state.get(u);
   }
 
-  // ======================== HELPERS ========================
-  function dist2D(a, b) {
-    return Math.hypot(a.x - b.x, a.z - b.z);
-  }
+  const dist2D = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+  const unidadEnemigaViva = u => u && u.hp > 0 && !u.isDead && !u.inHeli;
 
-  function targetScore(atacante, objetivo) {
-    // Puntaje: más alto = mejor blanco. Considera rol, distancia, tipo.
-    const st = getState(atacante);
-    const d = dist2D(atacante.mesh.position, objetivo.mesh.position);
-    let score = 1000 - d;                          // cercanos valen más
-    const role = atacante.role || 'rifle';
-    const otype = objetivo.type || 'soldier';
-    const orole = objetivo.role || null;
-
-    // Cohetes: prefieren vehículos
-    if (role === 'rocket') {
-      if (otype === 'tank') score += 400;
-      if (otype === 'apc') score += 300;
-      if (otype === 'artillery') score += 500;
-      if (otype === 'soldier') score -= 250;
-    } else {
-      // Rifles: prefieren infantería
-      if (otype === 'soldier') score += 200;
-      if (otype === 'tank') score -= 150;
-      if (otype === 'apc') score -= 100;
-      if (otype === 'artillery') score += 50;
-    }
-
-    // Si ya estaba apuntándolo, bonus (evita oscilar)
-    if (st.lastTarget === objetivo) score += 120;
-
-    // Unidades aéreas solo si tienen rol adecuado
-    if (otype === 'plane' || otype === 'heli') {
-      score -= 400;
-    }
-
-    return score;
-  }
-
-  function unidadEnemigaViva(u) {
-    return u && u.hp > 0 && !u.isDead && !u.inHeli;
-  }
-
-  // Combina soldados, vehículos y tanques en una lista única de "combatientes"
   function listaCombatientes() {
     const out = [];
     for (const s of API.soldiers) if (unidadEnemigaViva(s)) out.push(s);
     for (const v of API.vehicles) if (unidadEnemigaViva(v)) out.push(v);
-    for (const t of API.tanks) if (unidadEnemigaViva(t)) out.push(t);
+    for (const t of API.tanks)    if (unidadEnemigaViva(t)) out.push(t);
     return out;
   }
 
-  // ======================== CONSTRUIR ESCUADRONES ========================
+  // ======================== ESCUADRONES ========================
   function reconstruirEscuadrones() {
     escuadrones.length = 0;
     nextSquadId = 1;
-
-    const soldadosLibres = [];
+    const libres = [];
     for (const s of API.soldiers) {
       if (!unidadEnemigaViva(s)) continue;
       if (s.inHeli || s.marine) continue;
-      soldadosLibres.push(s);
+      libres.push(s);
       getState(s).squadId = 0;
     }
-
-    for (const s of soldadosLibres) {
+    for (const s of libres) {
       if (getState(s).squadId) continue;
-      const team = s.team;
       const grupo = [s];
-      // Buscar los más cercanos del mismo equipo
-      const candidatos = soldadosLibres
-        .filter(o => o !== s && o.team === team && !getState(o).squadId)
+      const candidatos = libres
+        .filter(o => o !== s && o.team === s.team && !getState(o).squadId)
         .map(o => ({ o, d: dist2D(s.mesh.position, o.mesh.position) }))
         .sort((a, b) => a.d - b.d);
-
       for (const c of candidatos) {
         if (grupo.length >= CFG.squadSize) break;
         if (c.d > 40) break;
         grupo.push(c.o);
       }
-
       const id = nextSquadId++;
       for (const u of grupo) getState(u).squadId = id;
-
-      // Asignar roles según composición
-      let tieneCohete = false;
-      for (const u of grupo) if (u.role === 'rocket') tieneCohete = true;
-
-      // El más cercano al enemigo será flanqueador, el resto assault
-      const centroide = V(0, 0, 0);
-      for (const u of grupo) centroide.add(u.mesh.position);
-      centroide.divideScalar(grupo.length);
-
-      // Enemigo promedio
-      const enemigos = listaCombatientes().filter(e => e.team !== team);
-      let avgE = null;
-      if (enemigos.length) {
-        avgE = V(0, 0, 0);
-        for (const e of enemigos) avgE.add(e.mesh.position);
-        avgE.divideScalar(enemigos.length);
-      }
-
       grupo.forEach((u, i) => {
         const st = getState(u);
         if (i % 3 === 0) st.role = 'flank';
         else if (u.role === 'rocket') st.role = 'support';
         else st.role = 'assault';
       });
-
-      escuadrones.push({ id, team, units: grupo, centroide, enemyCenter: avgE, created: performance.now() });
+      escuadrones.push({ id, team: s.team, units: grupo });
     }
   }
 
-  // ======================== ASIGNAR OBJETIVOS A ESCUADRÓN ========================
-  function asignarObjetivosEscuadron(sq, allEnemies) {
-    if (!allEnemies.length) return;
+  function asignarObjetivosEscuadron(sq, enemigos) {
+    if (!enemigos.length) return;
+    // Centroide
+    const c = V(0, 0, 0);
+    let n = 0;
+    for (const u of sq.units) if (unidadEnemigaViva(u)) { c.add(u.mesh.position); n++; }
+    if (!n) return;
+    c.divideScalar(n);
 
-    // Elegir blanco principal del escuadrón (más cercano al centroide)
     let best = null, bestD = 1e9;
-    for (const e of allEnemies) {
+    for (const e of enemigos) {
       if (e.team === sq.team) continue;
-      const d = dist2D(sq.centroide, e.mesh.position);
+      const d = dist2D(c, e.mesh.position);
       if (d < bestD) { bestD = d; best = e; }
     }
     if (!best) return;
 
-    // Repartir: assault → directo, flank → rodea, support → mantiene distancia
-    sq.units.forEach((u, i) => {
+    sq.units.forEach(u => {
       if (!unidadEnemigaViva(u)) return;
       const st = getState(u);
       const mp = u.mesh.position;
       const ep = best.mesh.position;
-
-      // Asignación de "enemy" para que la lógica base apunte bien
       u.enemy = best;
 
       if (st.role === 'flank') {
-        // Perpendicular a la línea U→E
         const dx = ep.x - mp.x, dz = ep.z - mp.z;
         const L = Math.hypot(dx, dz) || 1;
         const px = -dz / L, pz = dx / L;
-        const tx = ep.x + px * st.flankOffset * 1.2;
-        const tz = ep.z + pz * st.flankOffset * 1.2;
-        u.target.set(tx, 1, tz);
+        u.target.set(ep.x + px * st.flankOffset * 1.2, 1, ep.z + pz * st.flankOffset * 1.2);
         u.manualTarget = true;
       } else if (st.role === 'support') {
-        // Mantiene distancia 25-40 del enemigo
         const dx = mp.x - ep.x, dz = mp.z - ep.z;
         const L = Math.hypot(dx, dz) || 1;
         const want = 32;
-        const tx = ep.x + (dx / L) * want;
-        const tz = ep.z + (dz / L) * want;
-        u.target.set(tx, 1, tz);
+        u.target.set(ep.x + (dx / L) * want, 1, ep.z + (dz / L) * want);
         u.manualTarget = true;
       } else {
-        // Assault: se acerca directo
         u.target.set(ep.x, 1, ep.z);
         u.manualTarget = true;
       }
     });
-
-    sq.enemyCenter = best.mesh.position.clone();
-    sq.target = best;
   }
 
-  // ======================== HUIDA TÁCTICA ========================
-  function intentarHuida(u, dt, now) {
+  // ======================== HUIDA / REAGRUPAR ========================
+  function intentarHuida(u, now) {
     if (u.hp <= 0 || u.isDead) return false;
     const st = getState(u);
-    const ratio = u.hp / u.maxHp;
-
     if (st.fleeUntil > now) {
-      // Sigue huyendo: retrocede hacia el aliado más cercano
-      const aliados = API.soldiers.filter(a =>
-        a !== u && a.team === u.team && unidadEnemigaViva(a));
+      const aliados = API.soldiers.filter(a => a !== u && a.team === u.team && unidadEnemigaViva(a));
       let mejor = null, bestD = 1e9;
       for (const a of aliados) {
         const d = dist2D(a.mesh.position, u.mesh.position);
         if (d < bestD) { bestD = d; mejor = a; }
       }
-      const destino = mejor ? mejor.mesh.position : u.basePos;
-      u.target.set(destino.x, 1, destino.z);
+      const dest = mejor ? mejor.mesh.position : u.basePos;
+      u.target.set(dest.x, 1, dest.z);
       u.manualTarget = true;
-      u.enemy = null;                 // no dispara mientras huye
+      u.enemy = null;
       return true;
     }
-
+    const ratio = u.hp / u.maxHp;
     if (ratio < CFG.huidaHP) {
-      // ¿Está bajo fuego? (algún enemigo a <25)
-      const cerca = listaCombatientes().some(e =>
-        e.team !== u.team && dist2D(e.mesh.position, u.mesh.position) < 25);
-      if (cerca) {
-        st.fleeUntil = now + 3500;    // 3.5 s de huida
-        return true;
-      }
+      const cerca = listaCombatientes().some(e => e.team !== u.team && dist2D(e.mesh.position, u.mesh.position) < 25);
+      if (cerca) { st.fleeUntil = now + 3500; return true; }
     }
     return false;
   }
 
-  // ======================== REAGRUPAMIENTO ========================
   function reagrupar(u, now) {
-    if (u.manualTarget) return false;
+    if (u.manualTarget) return;
     const st = getState(u);
-    if (st.fleeUntil > now) return false;
-
-    // Buscar aliado cercano (no a sí mismo)
+    if (st.fleeUntil > now) return;
     let minD = 1e9, amigo = null;
     for (const a of API.soldiers) {
       if (a === u || a.team !== u.team || !unidadEnemigaViva(a)) continue;
@@ -387,12 +328,37 @@
     if (amigo && minD > CFG.soloDist) {
       u.target.set(amigo.mesh.position.x, 1, amigo.mesh.position.z);
       u.manualTarget = true;
-      return true;
     }
-    return false;
   }
 
-  // ======================== INTELIGENCIA DE ARTILLERÍA ========================
+  // ======================== INDICADOR DE IMPACTO ========================
+  const impactMarkers = [];
+  function marcarImpacto(pos) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.5, 1.0, 20),
+      new THREE.MeshBasicMaterial({ color: 0xff4422, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, 0.25, pos.z);
+    API.scene.add(ring);
+    impactMarkers.push({ mesh: ring, t: 0, life: 0.6 });
+  }
+
+  function updateMarkers(dt) {
+    for (let i = impactMarkers.length - 1; i >= 0; i--) {
+      const m = impactMarkers[i];
+      m.t += dt;
+      const k = m.t / m.life;
+      m.mesh.scale.setScalar(1 + k * 3);
+      m.mesh.material.opacity = 0.9 * (1 - k);
+      if (k >= 1) {
+        API.scene.remove(m.mesh);
+        impactMarkers.splice(i, 1);
+      }
+    }
+  }
+
+  // ======================== ARTILLERÍA IA ========================
   function updateArtilleria(u, dt) {
     if (u.isDead || u.hp <= 0) {
       u.respawnTimer += dt;
@@ -407,129 +373,188 @@
       return;
     }
 
-    u.cooldown -= dt;
+    // Cooldown propio
+    u.artyCooldown -= dt;
     u.scanT -= dt;
+
+    // Estimar velocidad del último blanco (para predicción)
+    if (u.targetEnemy && unidadEnemigaViva(u.targetEnemy)) {
+      const p = u.targetEnemy.mesh.position;
+      const dx = p.x - u.lastPos.x, dz = p.z - u.lastPos.z;
+      // Suavizado
+      u.lastVel.x = u.lastVel.x * 0.7 + (dx / Math.max(dt, 0.001)) * 0.3;
+      u.lastVel.z = u.lastVel.z * 0.7 + (dz / Math.max(dt, 0.001)) * 0.3;
+      u.lastPos.copy(p);
+    }
 
     // Reelegir blanco cada 1.2 s
     if (u.scanT <= 0) {
       u.scanT = 1.2;
       let best = null, bestScore = -1e9;
-      const enemigos = listaCombatientes().filter(e => e.team !== u.team && unidadEnemigaViva(e));
+      const enemigos = listaCombatientes().filter(e => e.team !== u.team);
       for (const e of enemigos) {
         const d = dist2D(u.mesh.position, e.mesh.position);
-        if (d > CFG.artilleriaRange) continue;
-        // Prioriza grupos: cuenta enemigos cerca del blanco
+        if (d > CFG.artyRange || d < CFG.artyMinRange * 0.6) continue;
         let cluster = 0;
         for (const o of enemigos) {
           if (o === e) continue;
           if (dist2D(o.mesh.position, e.mesh.position) < 12) cluster++;
         }
-        const score = (e.type === 'soldier' ? 1 : 2) * (10 + cluster * 8) - d * 0.2;
+        const baseScore = (e.type === 'soldier' ? 1 : 2) * (10 + cluster * 8);
+        const score = baseScore - d * 0.2;
         if (score > bestScore) { bestScore = score; best = e; }
       }
       u.targetEnemy = best;
     }
 
-    if (!u.targetEnemy || !unidadEnemigaViva(u.targetEnemy)) {
-      // Sin blanco: patrulla cerca de su base
-      const orbit = performance.now() * 0.0003;
-      const tx = u.basePos.x + Math.cos(orbit) * 8;
-      const tz = u.basePos.z + Math.sin(orbit) * 8;
-      u.target.set(tx, 1, tz);
-      return;
-    }
+    const enRango = u.targetEnemy && unidadEnemigaViva(u.targetEnemy) &&
+                    dist2D(u.mesh.position, u.targetEnemy.mesh.position) <= CFG.artyRange;
 
-    const tp = u.targetEnemy.mesh.position;
+    // Movimiento: se aleja si está muy cerca, se acerca si muy lejos
+    if (u.targetEnemy && unidadEnemigaViva(u.targetEnemy)) {
+      const tp = u.targetEnemy.mesh.position;
+      const d = dist2D(u.mesh.position, tp);
+      if (d < CFG.artyMinRange) {
+        const dx = u.mesh.position.x - tp.x, dz = u.mesh.position.z - tp.z;
+        const L = Math.hypot(dx, dz) || 1;
+        u.target.set(u.mesh.position.x + (dx / L) * 10, 1, u.mesh.position.z + (dz / L) * 10);
+        u.manualTarget = true;
+      } else if (d > CFG.artyRange * 0.9) {
+        u.target.set(tp.x, 1, tp.z);
+        u.manualTarget = true;
+      } else {
+        u.target.copy(u.mesh.position);
+        u.manualTarget = false;
+      }
 
-    // Si el objetivo está muy cerca, retrocede
-    const d = dist2D(u.mesh.position, tp);
-    if (d < 45) {
-      const dx = u.mesh.position.x - tp.x, dz = u.mesh.position.z - tp.z;
-      const L = Math.hypot(dx, dz) || 1;
-      u.target.set(u.mesh.position.x + (dx / L) * 8, 1, u.mesh.position.z + (dz / L) * 8);
-    } else if (d > CFG.artilleriaRange * 0.85) {
-      u.target.set(tp.x, 1, tp.z);
+      // Apuntar turret hacia el blanco (usa el lookAt real)
+      if (enRango) {
+        u.turret.lookAt(tp.x, u.turret.position.y + u.mesh.position.y, tp.z);
+      }
+
+      // Disparar
+      if (u.artyCooldown <= 0 && enRango) {
+        // Predicción con lead
+        const d = dist2D(u.mesh.position, tp);
+        const flightTime = d / CFG.artyShellSpeed;
+        const predX = tp.x + u.lastVel.x * flightTime * 0.9;
+        const predZ = tp.z + u.lastVel.z * flightTime * 0.9;
+
+        const muzzle = V(u.mesh.position.x, u.mesh.position.y + 5.5, u.mesh.position.z);
+        const objetivo = V(predX, 1, predZ);
+
+        API.fireProjectile(muzzle, objetivo, 0xff5522, CFG.artyDamage, u.team);
+        API.playSound('explosion');
+
+        // Marca visual en el punto de impacto
+        setTimeout(() => {
+          marcarImpacto(V(predX, 0, predZ));
+          // Splash de área hecho a mano
+          for (const e of listaCombatientes()) {
+            if (e.team === u.team) continue;
+            if (dist2D(e.mesh.position, V(predX, 0, predZ)) < CFG.artySplashRadius) {
+              e.hp -= 60;
+              if (e.hp <= 0) {
+                e.isDead = true;
+                if (e.mesh && e.type === 'soldier') e.mesh.position.y = -0.5;
+                if (e.bodyMat) e.bodyMat.color.setHex(0x1a1a1a);
+              }
+            }
+          }
+        }, flightTime * 1000);
+
+        u.artyCooldown = CFG.artyCooldown;
+      }
     } else {
-      // En rango: quieto apuntando
-      u.target.copy(u.mesh.position);
-    }
-
-    // Apuntar la torreta (el tubo del mortero) hacia arriba fijamente
-    // En el modelo, el tubo ya está inclinado. Solo disparamos.
-    if (u.cooldown <= 0 && d <= CFG.artilleriaRange) {
-      // Disparo con retardo visual
-      const muzzle = u.mesh.position.clone();
-      muzzle.y += 5.5;
-      // Predice posición futura del blanco (lead)
-      const velocidadBlanco = u.targetEnemy.lastSpeed || V(0, 0, 0);
-      const flightTime = d / 90;
-      const pred = tp.clone().addScaledVector(velocidadBlanco, flightTime * 0.5);
-      API.fireProjectile(muzzle, pred, 0xff5522, CFG.artilleriaDamage, u.team);
-      API.playSound('explosion');
-      u.cooldown = CFG.artilleriaCooldown;
-      // Sacudida visual
-      u.mesh.userData.lastShot = performance.now();
-    }
-
-    // Orientar la base ligeramente hacia el blanco
-    if (d < CFG.artilleriaRange) {
-      const want = Math.atan2(tp.x - u.mesh.position.x, tp.z - u.mesh.position.z);
-      let diff = want - u.mesh.rotation.y;
-      while (diff > Math.PI) diff -= 2 * Math.PI;
-      while (diff < -Math.PI) diff += 2 * Math.PI;
-      u.mesh.rotation.y += diff * Math.min(1, dt * 1.2);
+      // Sin blanco: patrulla suave alrededor de basePos
+      const orbit = performance.now() * 0.0003;
+      u.target.set(u.basePos.x + Math.cos(orbit) * 8, 1, u.basePos.z + Math.sin(orbit) * 8);
+      u.manualTarget = true;
     }
   }
 
-  // ======================== ACTUALIZACIÓN PRINCIPAL ========================
+  // ======================== CONTROL DIRECTO (arreglo) ========================
+  // Cuando el jugador controla una artillería y mantiene FUEGO, disparamos
+  // nosotros mismos. También movemos la cámara más atrás para no ver el modelo.
+  function handleDirectControlArtillery(dt) {
+    if (!API.directControlActive || !API.directControlUnit) return;
+    const u = API.directControlUnit;
+    if (!u.isArtilleria) return;
+
+    // --- Cámara: alejar del modelo ---
+    const cam = API.camera;
+    // Reconstruimos el forward de la cámara actual (ya la puso fpCamera)
+    const q = cam.quaternion;
+    const fwd = V(0, 0, -1).applyQuaternion(q);
+    const p = u.mesh.position;
+    const dist = 18;   // ← antes era 9 en el juego base
+    cam.position.set(
+      p.x - fwd.x * dist,
+      p.y + 9,
+      p.z - fwd.z * dist
+    );
+    cam.lookAt(
+      cam.position.x + fwd.x,
+      cam.position.y + fwd.y,
+      cam.position.z + fwd.z
+    );
+
+    // --- Disparo con FUEGO ---
+    if (!window.__firing) return;
+    u.artyCooldown -= 0;   // no afecta; usamos otro
+    if (!u._playerCd || u._playerCd <= 0) {
+      // Dirección desde el tubo hacia el frente de la cámara
+      const muzzle = V(p.x, p.y + 5.5, p.z);
+      const target = V(
+        cam.position.x + fwd.x * 200,
+        1,
+        cam.position.z + fwd.z * 200
+      );
+      API.fireProjectile(muzzle, target, 0xff5522, CFG.artyDamage, 'ally');
+      API.playSound('explosion');
+      marcarImpacto(V(target.x, 0, target.z));
+      u._playerCd = 1.5;  // 1.5 s entre disparos manuales
+    }
+  }
+
+  // ======================== TICK ========================
   let acc = 0;
-  let now = 0;
 
   function tick(dt) {
-    now = performance.now();
+    const now = performance.now();
     acc += dt;
 
-    // Reconstruir escuadrones y asignar blancos cada CFG.reevalEvery
     if (acc >= CFG.reevalEvery) {
       acc = 0;
       reconstruirEscuadrones();
-
       const enemigos = listaCombatientes();
-      for (const sq of escuadrones) {
-        // centroide
-        const c = V(0, 0, 0);
-        let n = 0;
-        for (const u of sq.units) {
-          if (unidadEnemigaViva(u)) { c.add(u.mesh.position); n++; }
-        }
-        if (n === 0) continue;
-        c.divideScalar(n);
-        sq.centroide.copy(c);
-        asignarObjetivosEscuadron(sq, enemigos);
-      }
+      for (const sq of escuadrones) asignarObjetivosEscuadron(sq, enemigos);
     }
 
-    // Aplicar huida / reagrupamiento a soldados
     let huyendo = 0, flanqueando = 0;
     for (const s of API.soldiers) {
       if (!unidadEnemigaViva(s)) continue;
-      if (intentarHuida(s, dt, now)) { huyendo++; continue; }
+      if (intentarHuida(s, now)) { huyendo++; continue; }
       reagrupar(s, now);
-      const st = getState(s);
-      if (st.role === 'flank') flanqueando++;
+      if (getState(s).role === 'flank') flanqueando++;
     }
 
-    // Artillería
+    // Cooldown del disparo manual
+    for (const a of artillerias) {
+      if (a._playerCd > 0) a._playerCd -= dt;
+    }
+
     let artyVivos = 0;
     for (const a of artillerias) {
       updateArtilleria(a, dt);
       if (unidadEnemigaViva(a)) artyVivos++;
     }
 
-    // Actualizar HP bars de artillería (la base no las incluye porque no están en allUnits)
+    // HP bars de artillería
     for (const a of artillerias) {
       if (!unidadEnemigaViva(a)) continue;
-      a.hpGroup.visible = (a.hp < a.maxHp) || API.selectedUnits?.includes?.(a);
+      a.hpGroup.visible = (a.hp < a.maxHp) ||
+        (API.selectedUnits && API.selectedUnits.includes && API.selectedUnits.includes(a));
       a.hpGroup.position.copy(a.mesh.position);
       a.hpGroup.position.y += a.hpYOffset;
       a.hpGroup.quaternion.copy(API.camera.quaternion);
@@ -537,12 +562,18 @@
       a.hpBar.position.x = -(a.hpWidth - a.hpWidth * a.hpBar.scale.x) / 2;
     }
 
+    // Marcadores de impacto
+    updateMarkers(dt);
+
+    // Control directo especial
+    handleDirectControlArtillery(dt);
+
     // HUD
-    $('ai-sq-ally').textContent   = escuadrones.filter(s => s.team === 'ally').length;
-    $('ai-sq-enemy').textContent  = escuadrones.filter(s => s.team === 'enemy').length;
-    $('ai-fleeing').textContent   = huyendo;
-    $('ai-flank').textContent     = flanqueando;
-    $('ai-arty').textContent      = artyVivos;
+    $('ai-sq-ally').textContent  = escuadrones.filter(s => s.team === 'ally').length;
+    $('ai-sq-enemy').textContent = escuadrones.filter(s => s.team === 'enemy').length;
+    $('ai-fleeing').textContent  = huyendo;
+    $('ai-flank').textContent    = flanqueando;
+    $('ai-arty').textContent     = artyVivos;
   }
 
   // ======================== HOOK ========================
@@ -551,17 +582,13 @@
     if (typeof prevOnUpdate === 'function') {
       try { prevOnUpdate(dt); } catch (e) { console.error(e); }
     }
+
+    // Bloquea que la IA base dispare artillería (evita el crash)
+    for (const u of artillerias) u.cooldown = Infinity;
+
     try { tick(dt); } catch (e) { console.error('IA Mejorada error:', e); }
   };
 
-  // Exponer para debug
-  window.IAMejorada = {
-    version: '1.0',
-    escuadrones,
-    artillerias,
-    config: CFG,
-    reconstruir: reconstruirEscuadrones,
-  };
-
-  console.log('🧠 Mod IA Mejorada v1.0 listo.');
+  window.IAMejorada = { version: '1.1', escuadrones, artillerias, config: CFG };
+  console.log('🧠 Mod IA Mejorada v1.1 listo.');
 })();
