@@ -1,11 +1,12 @@
 /* ============================================================
-   MOD: Modelos HD + IA de Vuelo v3.2
-   - Fix: preservar userData al reemplazar meshes
-   - Fix: NO reemplazar artillería de ia_mejorada.js (isArtilleria)
+   MOD: Aire y Conquista v1.0
+   Añade: aeropuertos, cazas, helicópteros de ataque, cuarteles HQ,
+   HUD de bases y condiciones de victoria/derrota.
+   Uso: colócalo como modificaciones/aire_conquista.js
    ============================================================ */
 (function () {
-  if (window.__HD_MODELS_LOADED) { console.warn('⚠️ Modelos HD ya cargados'); return; }
-  window.__HD_MODELS_LOADED = true;
+  if (window.__AIRCONQUEST_LOADED) { console.warn('⚠️ Mod ya cargado'); return; }
+  window.__AIRCONQUEST_LOADED = true;
 
   const API = window.IronfrontAPI;
   if (!API) { console.error('❌ IronfrontAPI no disponible'); return; }
@@ -13,445 +14,848 @@
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
 
-  console.log('🎨 Mod Modelos HD v3.2: iniciando...');
-  API.say('🎨 Modelos HD v3.2');
+  console.log('✈️ Mod Aire y Conquista v1.0: iniciando...');
+  API.say('✈️ Aire y Conquista v1.0 cargado');
 
-  const MAT = {
-    dark:   new THREE.MeshLambertMaterial({ color: 0x1a1a1a }),
-    black:  new THREE.MeshLambertMaterial({ color: 0x0a0a0a }),
-    glass:  new THREE.MeshLambertMaterial({ color: 0x0e1a2a, emissive: 0x051020 }),
-    metal:  new THREE.MeshLambertMaterial({ color: 0x666666 }),
-    metalD: new THREE.MeshLambertMaterial({ color: 0x333333 }),
-    chrome: new THREE.MeshLambertMaterial({ color: 0x999999 }),
-    rubber: new THREE.MeshLambertMaterial({ color: 0x0a0a0a }),
-    rim:    new THREE.MeshLambertMaterial({ color: 0x888888 }),
-    redL:   new THREE.MeshBasicMaterial({ color: 0xff2222 }),
-    greenL: new THREE.MeshBasicMaterial({ color: 0x00ff44 }),
-    amberL: new THREE.MeshBasicMaterial({ color: 0xffaa00 }),
-    tip:    new THREE.MeshBasicMaterial({ color: 0xcc2222 }),
-    rotor:  new THREE.MeshBasicMaterial({ color: 0x111111 }),
+  // ======================== ESTADO ========================
+  const mod = {
+    planes: [],
+    helis: [],
+    hqs: [],
+    gameOver: false,
+    winner: null,
   };
-  function mk(g, geo, mat, x, y, z, rx, ry, rz) {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    if (rx) m.rotation.x = rx; if (ry) m.rotation.y = ry; if (rz) m.rotation.z = rz;
-    m.castShadow = true; g.add(m); return m;
-  }
 
-  function buildPlane(color) {
-    const bodyMat = new THREE.MeshLambertMaterial({ color });
-    const bodyDk  = new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.7) });
-    const g = new THREE.Group();
-    mk(g, new THREE.BoxGeometry(1.7, 1.4, 9), bodyMat, 0, 0, 0);
-    mk(g, new THREE.BoxGeometry(1.3, 1.0, 3.5), bodyMat, 0, 0.1, -5.5);
-    mk(g, new THREE.ConeGeometry(0.85, 3.2, 10), bodyMat, 0, 0, 5.5, Math.PI / 2);
-    mk(g, new THREE.ConeGeometry(0.35, 0.8, 10), MAT.tip, 0, 0, 7.2, Math.PI / 2);
-    mk(g, new THREE.CylinderGeometry(0.03, 0.03, 0.8, 5), MAT.chrome, 0, 0, 7.9, Math.PI / 2);
-    mk(g, new THREE.BoxGeometry(0.95, 0.75, 2.8), MAT.glass, 0, 0.9, -0.8);
-    mk(g, new THREE.BoxGeometry(1.0, 0.08, 2.9), bodyDk, 0, 1.30, -0.8);
-    mk(g, new THREE.BoxGeometry(0.08, 0.75, 2.9), bodyDk, 0, 0.9, -0.8);
-    mk(g, new THREE.BoxGeometry(0.5, 0.5, 0.5), MAT.dark, 0, 1.25, -1.0);
-    const wl = mk(g, new THREE.BoxGeometry(4.2, 0.32, 2.8), bodyMat, -2.6, 0, 0.6); wl.rotation.z = 0.14;
-    const wr = mk(g, new THREE.BoxGeometry(4.2, 0.32, 2.8), bodyMat, 2.6, 0, 0.6);  wr.rotation.z = -0.14;
-    mk(g, new THREE.BoxGeometry(0.85, 0.45, 1.4), MAT.dark, -4.6, 0.2, 1.0);
-    mk(g, new THREE.BoxGeometry(0.85, 0.45, 1.4), MAT.dark, 4.6, 0.2, 1.0);
-    mk(g, new THREE.SphereGeometry(0.12, 5, 5), MAT.redL, -4.7, 0.45, 1.0);
-    mk(g, new THREE.SphereGeometry(0.12, 5, 5), MAT.greenL, 4.7, 0.45, 1.0);
-    for (const wx of [-3.0, 3.0]) for (const wz of [0.2, 1.4]) {
-      mk(g, new THREE.CylinderGeometry(0.16, 0.16, 2.8, 8), MAT.metal, wx, -0.45, wz, Math.PI / 2);
-      mk(g, new THREE.ConeGeometry(0.16, 0.5, 8), MAT.dark, wx, -0.45, wz + 1.65, Math.PI / 2);
-    }
-    const tv = mk(g, new THREE.BoxGeometry(0.32, 2.6, 2), bodyMat, 0, 1.5, -4.5); tv.rotation.x = -0.25;
-    mk(g, new THREE.BoxGeometry(3.8, 0.28, 1.3), bodyMat, 0, 0, -4.8);
-    for (const ex of [-0.7, 0.7]) {
-      mk(g, new THREE.CylinderGeometry(0.55, 0.55, 2, 12), MAT.dark, ex, -0.2, -5.5, Math.PI / 2);
-      mk(g, new THREE.CylinderGeometry(0.42, 0.42, 0.3, 12), MAT.black, ex, -0.2, -6.4, Math.PI / 2);
-    }
-    return g;
-  }
+  // ======================== HUD DE BASES ========================
+  const hudHq = document.createElement('div');
+  hudHq.style.cssText = 'position:fixed;top:6px;right:6px;z-index:26;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 9px;font:11px sans-serif;color:#fff;min-width:170px;backdrop-filter:blur(4px)';
+  hudHq.innerHTML = `
+    <div style="font-weight:700;color:#9ecbff;margin-bottom:4px;font-size:10px;letter-spacing:1px">⌂ CUARTELES</div>
+    <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">
+      <span style="color:#7ec8ff;width:52px;font-weight:700">ALIADA</span>
+      <div style="flex:1;background:#2a2a2a;border-radius:3px;overflow:hidden;height:9px;border:1px solid #000">
+        <div id="hq-ally-bar" style="height:100%;width:100%;background:linear-gradient(90deg,#007bff,#4fc3ff);transition:width .15s"></div>
+      </div>
+      <span id="hq-ally-txt" style="width:36px;text-align:right;font-weight:700">100%</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px">
+      <span style="color:#ff9e9e;width:52px;font-weight:700">ENEMIGA</span>
+      <div style="flex:1;background:#2a2a2a;border-radius:3px;overflow:hidden;height:9px;border:1px solid #000">
+        <div id="hq-enemy-bar" style="height:100%;width:100%;background:linear-gradient(90deg,#ff2222,#ff8080);transition:width .15s"></div>
+      </div>
+      <span id="hq-enemy-txt" style="width:36px;text-align:right;font-weight:700">100%</span>
+    </div>
+  `;
+  document.body.appendChild(hudHq);
 
-  function buildHeli(color) {
-    const bodyMat = new THREE.MeshLambertMaterial({ color });
-    const bodyDk  = new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.75) });
-    const g = new THREE.Group();
-    mk(g, new THREE.BoxGeometry(2.6, 2.1, 6), bodyMat, 0, 0, 0);
-    mk(g, new THREE.ConeGeometry(1.3, 2.2, 12), bodyMat, 0, 0, 4, Math.PI / 2);
-    mk(g, new THREE.BoxGeometry(2.0, 1.5, 1.7), MAT.glass, 0, 0.35, 1.8);
-    mk(g, new THREE.BoxGeometry(2.05, 0.08, 1.75), bodyDk, 0, 1.1, 1.8);
-    mk(g, new THREE.BoxGeometry(0.08, 1.5, 1.75), bodyDk, 0, 0.35, 1.8);
-    mk(g, new THREE.BoxGeometry(2.05, 1.5, 0.08), bodyDk, 0, 0.35, 2.65);
-    mk(g, new THREE.BoxGeometry(0.7, 0.7, 5), bodyMat, 0, 0.3, -5.5);
-    mk(g, new THREE.BoxGeometry(3.2, 0.16, 1.1), bodyMat, 0, 0.3, -7.2);
-    const rT = new THREE.Group(); rT.position.set(0.5, 0.5, -8);
-    mk(rT, new THREE.BoxGeometry(0.1, 2.4, 0.15), MAT.rotor, 0, 0, 0);
-    mk(rT, new THREE.BoxGeometry(0.15, 0.1, 2.4), MAT.rotor, 0, 0, 0);
-    g.add(rT);
-    mk(g, new THREE.TorusGeometry(1.3, 0.08, 5, 12), MAT.metalD, 0.5, 0.5, -8, 0, Math.PI / 2);
-    for (const sx of [-1.05, 1.05]) {
-      mk(g, new THREE.BoxGeometry(0.16, 0.16, 4.5), MAT.metal, sx, -1.5, 0.5);
-      mk(g, new THREE.BoxGeometry(0.16, 1.3, 0.16), MAT.metal, sx, -0.75, -1.4);
-      mk(g, new THREE.BoxGeometry(0.16, 1.3, 0.16), MAT.metal, sx, -0.75, 2.2);
-    }
-    const rM = new THREE.Group(); rM.position.set(0, 1.5, 0);
-    mk(rM, new THREE.CylinderGeometry(0.16, 0.16, 0.9, 8), MAT.dark, 0, 0.45, 0);
-    mk(rM, new THREE.CylinderGeometry(0.35, 0.35, 0.25, 12), MAT.metalD, 0, 0.05, 0);
-    for (let i = 0; i < 4; i++) {
-      const bg = new THREE.BoxGeometry(0.3, 0.06, 6.5); bg.translate(0, 0, 3.25);
-      const bl = new THREE.Mesh(bg, MAT.rotor);
-      bl.rotation.y = (i / 4) * Math.PI * 2; bl.position.y = 0.9; rM.add(bl);
-    }
-    g.add(rM);
-    mk(g, new THREE.BoxGeometry(6, 0.22, 0.9), bodyMat, 0, -0.2, 0.6);
-    for (const wx of [-2.4, -1.6, 1.6, 2.4]) {
-      mk(g, new THREE.CylinderGeometry(0.32, 0.32, 1.7, 8), MAT.dark, wx, -0.65, 0.9, Math.PI / 2);
-    }
-    const turret = new THREE.Group();
-    mk(turret, new THREE.CylinderGeometry(0.35, 0.35, 0.3, 10), MAT.metalD, 0, 0, 0);
-    mk(turret, new THREE.CylinderGeometry(0.1, 0.13, 1.4, 8), MAT.dark, 0, 0, 0.9, Math.PI / 2);
-    turret.position.set(0, -1.0, 2.6); g.add(turret);
-    for (const ex of [-0.8, 0.8]) {
-      mk(g, new THREE.CylinderGeometry(0.42, 0.42, 1.2, 8), MAT.dark, ex, 0.7, -2.8, Math.PI / 2);
-    }
-    mk(g, new THREE.BoxGeometry(0.5, 0.5, 0.7), MAT.dark, 0, 1.0, 3.2);
-    mk(g, new THREE.SphereGeometry(0.1, 5, 5), MAT.redL, -3.1, -0.2, 0.6);
-    mk(g, new THREE.SphereGeometry(0.1, 5, 5), MAT.greenL, 3.1, -0.2, 0.6);
-    return { group: g, rotorMain: rM, rotorTail: rT, turret };
-  }
+  // ======================== OVERLAY FIN DE PARTIDA ========================
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);backdrop-filter:blur(6px);font-family:sans-serif;color:#fff;text-align:center';
+  overlay.innerHTML = `
+    <div style="animation:ovFade .5s ease-out">
+      <div id="ov-title" style="font-size:60px;font-weight:900;letter-spacing:6px;margin-bottom:8px;text-shadow:0 0 30px currentColor"></div>
+      <div id="ov-sub" style="font-size:16px;opacity:.7;margin-bottom:28px">La partida ha terminado</div>
+      <button id="ov-restart" style="background:#4fc3ff;color:#000;border:none;padding:14px 34px;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">JUGAR DE NUEVO</button>
+    </div>
+    <style>@keyframes ovFade{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}</style>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('ov-restart').addEventListener('click', () => location.reload());
 
-  function buildTank(color) {
-    const bodyMat = new THREE.MeshLambertMaterial({ color });
-    const bodyDk  = new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.7) });
-    const trackMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
-    const g = new THREE.Group();
-    mk(g, new THREE.BoxGeometry(4.8, 1.6, 7.5), bodyMat, 0, 1, 0);
-    const glacis = mk(g, new THREE.BoxGeometry(4.8, 0.8, 2), bodyMat, 0, 1.4, 3.5); glacis.rotation.x = Math.PI / 6;
-    mk(g, new THREE.BoxGeometry(0.2, 1.0, 7.0), bodyDk, -3.4, 0.9, 0);
-    mk(g, new THREE.BoxGeometry(0.2, 1.0, 7.0), bodyDk, 3.4, 0.9, 0);
-    for (const sx of [-2.8, 2.8]) {
-      mk(g, new THREE.BoxGeometry(1.2, 1.4, 8), trackMat, sx, 0.7, 0);
-      for (let i = 0; i < 5; i++)
-        mk(g, new THREE.CylinderGeometry(0.35, 0.35, 1.3, 10), MAT.metalD, sx, 0.4, -3.2 + i * 1.6, 0, 0, Math.PI / 2);
-      mk(g, new THREE.CylinderGeometry(0.4, 0.4, 1.3, 12), MAT.metal, sx, 0.7, 4.0, 0, 0, Math.PI / 2);
-      mk(g, new THREE.CylinderGeometry(0.4, 0.4, 1.3, 12), MAT.metal, sx, 0.7, -4.0, 0, 0, Math.PI / 2);
-    }
-    const turret = new THREE.Group();
-    turret.position.set(0, 2.1, 0.5);
-    mk(turret, new THREE.CylinderGeometry(1.8, 2, 1, 6), bodyMat, 0, 0, 0);
-    mk(turret, new THREE.CylinderGeometry(0.4, 0.45, 0.3, 8), MAT.metalD, -0.5, 0.6, -0.3);
-    mk(turret, new THREE.CylinderGeometry(0.06, 0.06, 0.9, 5), MAT.dark, -0.5, 1.1, -0.1);
-    mk(turret, new THREE.CylinderGeometry(0.25, 0.3, 6, 8), MAT.metalD, 0, 0, 3.5, Math.PI / 2);
-    mk(turret, new THREE.CylinderGeometry(0.35, 0.35, 2.5, 8), bodyDk, 0, 0, 3.5, Math.PI / 2);
-    mk(turret, new THREE.CylinderGeometry(0.35, 0.35, 0.6, 8), MAT.dark, 0, 0, 6.4, Math.PI / 2);
-    mk(turret, new THREE.BoxGeometry(1.6, 0.6, 1.2), bodyDk, 0, -0.2, -1.6);
-    g.add(turret);
-    return { group: g, turret };
-  }
-
-  function buildAPC(color) {
-    const bodyMat = new THREE.MeshLambertMaterial({ color });
-    const bodyDk  = new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.7) });
-    const g = new THREE.Group();
-    mk(g, new THREE.BoxGeometry(3.8, 2, 7.5), bodyMat, 0, 1.2, 0);
-    const glacis = mk(g, new THREE.BoxGeometry(3.8, 1.0, 2), bodyMat, 0, 1.4, 4.2); glacis.rotation.x = Math.PI / 7;
-    for (const sx of [-1.9, 1.9]) for (const wz of [-2.6, 0, 2.6]) {
-      mk(g, new THREE.CylinderGeometry(0.8, 0.8, 0.6, 14), MAT.rubber, sx, 0.8, wz, 0, 0, Math.PI / 2);
-      mk(g, new THREE.CylinderGeometry(0.4, 0.4, 0.62, 10), MAT.rim, sx, 0.8, wz, 0, 0, Math.PI / 2);
-      mk(g, new THREE.CylinderGeometry(0.15, 0.15, 0.65, 6), MAT.metalD, sx, 0.8, wz, 0, 0, Math.PI / 2);
-    }
-    const turret = new THREE.Group();
-    turret.position.set(0, 2.4, 0);
-    mk(turret, new THREE.BoxGeometry(1.8, 0.8, 2), bodyMat, 0, 0, 0);
-    mk(turret, new THREE.CylinderGeometry(0.15, 0.15, 3.5, 8), MAT.metalD, 0, 0, 1.8, Math.PI / 2);
-    g.add(turret);
-    return { group: g, turret };
-  }
-
-  // VFX: CRASH
-  const crashFX = {
-    smoke: [], fire: [], wreck: [], smokePlumes: [],
-    update(dt) {
-      for (let i = this.smoke.length - 1; i >= 0; i--) {
-        const s = this.smoke[i]; s.t += dt;
-        s.mesh.position.addScaledVector(s.vel, dt); s.vel.y += 1.5 * dt;
-        s.mesh.scale.multiplyScalar(1 + dt * 1.2);
-        s.mesh.material.opacity = 0.75 * Math.max(0, 1 - s.t / s.life);
-        if (s.t >= s.life) { API.scene.remove(s.mesh); this.smoke.splice(i, 1); }
-      }
-      for (let i = this.fire.length - 1; i >= 0; i--) {
-        const f = this.fire[i]; f.t += dt;
-        f.mesh.position.addScaledVector(f.vel, dt); f.vel.y -= 2 * dt;
-        f.mesh.scale.multiplyScalar(Math.max(0.1, 1 - dt * 1.5));
-        f.mesh.material.opacity = Math.max(0, 1 - f.t / f.life);
-        if (f.t >= f.life) { API.scene.remove(f.mesh); this.fire.splice(i, 1); }
-      }
-      for (let i = this.wreck.length - 1; i >= 0; i--) {
-        const w = this.wreck[i]; w.t += dt;
-        w.vel.y -= 20 * dt;
-        w.mesh.position.addScaledVector(w.vel, dt);
-        w.mesh.rotation.x += w.ang.x * dt; w.mesh.rotation.y += w.ang.y * dt; w.mesh.rotation.z += w.ang.z * dt;
-        if (w.mesh.position.y < 0.15) { w.mesh.position.y = 0.15; w.vel.y *= -0.3; w.vel.x *= 0.6; w.vel.z *= 0.6; }
-        if (w.t >= w.life) { API.scene.remove(w.mesh); this.wreck.splice(i, 1); }
-      }
-      for (let i = this.smokePlumes.length - 1; i >= 0; i--) {
-        const sp = this.smokePlumes[i]; sp.t += dt;
-        sp.mesh.position.y = sp.baseY + (sp.t % 4) * 2.5;
-        sp.mesh.scale.setScalar(1 + (sp.t % 4) * 0.4);
-        sp.mesh.material.opacity = 0.7 * (1 - (sp.t % 4) / 4);
-        if (sp.t % 4 > 3.9) sp.t = 0;
-        if (sp.t >= sp.life) { API.scene.remove(sp.mesh); this.smokePlumes.splice(i, 1); }
-      }
-    }
-  };
-  function spawnCrashSmoke(pos, big) {
-    const size = big ? rnd(1.2, 2.2) : rnd(0.5, 1.0);
-    const m = new THREE.Mesh(new THREE.SphereGeometry(size, 6, 5), new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.8, depthWrite: false }));
-    m.position.copy(pos); m.position.x += rnd(-0.5, 0.5); m.position.z += rnd(-0.5, 0.5);
-    API.scene.add(m);
-    crashFX.smoke.push({ mesh: m, vel: V(rnd(-0.5, 0.5), rnd(0.5, 1.5), rnd(-0.5, 0.5)), life: rnd(1.5, 2.5), t: 0 });
-  }
-  function spawnCrashFire(pos) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(rnd(0.6, 1.2), 6, 5), new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0xff6600 : 0xffcc00, transparent: true, opacity: 0.95 }));
-    m.position.copy(pos); m.position.x += rnd(-0.6, 0.6); m.position.z += rnd(-0.6, 0.6);
-    API.scene.add(m);
-    crashFX.fire.push({ mesh: m, vel: V(rnd(-2, 2), rnd(-1, 1), rnd(-2, 2)), life: rnd(0.5, 1.0), t: 0 });
-  }
-  function spawnWreckage(pos, count) {
-    const matBody = new THREE.MeshLambertMaterial({ color: 0x4a3a2a });
-    const matMetal = new THREE.MeshLambertMaterial({ color: 0x333333 });
-    for (let i = 0; i < count; i++) {
-      const g = new THREE.Mesh(new THREE.BoxGeometry(rnd(0.4, 1.4), rnd(0.2, 0.6), rnd(0.4, 1.4)), Math.random() < 0.5 ? matBody : matMetal);
-      g.position.copy(pos); g.position.x += rnd(-1, 1); g.position.y += rnd(0.3, 1.5); g.position.z += rnd(-1, 1);
-      g.rotation.set(rnd(0, 3), rnd(0, 3), rnd(0, 3));
-      g.castShadow = true;
-      API.scene.add(g);
-      crashFX.wreck.push({ mesh: g, vel: V(rnd(-6, 6), rnd(3, 8), rnd(-6, 6)), ang: V(rnd(-8, 8), rnd(-8, 8), rnd(-8, 8)), life: 8, t: 0 });
-    }
-  }
-  function spawnCrashPlume(pos) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(rnd(1.5, 2.5), 6, 5), new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.7, depthWrite: false }));
-    m.position.copy(pos); m.position.y = 1.5;
-    API.scene.add(m);
-    crashFX.smokePlumes.push({ mesh: m, baseY: 1.5, t: Math.random() * 6, life: 15 });
-  }
-  function spawnImpactExplosion(pos) {
-    const flash = new THREE.Mesh(new THREE.SphereGeometry(4, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffcc44, transparent: true, opacity: 1 }));
-    flash.position.copy(pos); API.scene.add(flash);
-    let t = 0;
-    const expand = setInterval(() => {
-      t += 0.05; flash.scale.setScalar(1 + t * 2); flash.material.opacity = Math.max(0, 1 - t * 2);
-      if (t > 0.6) { API.scene.remove(flash); clearInterval(expand); }
-    }, 30);
-    API.playSound('explosion');
-    spawnCrashSmoke(pos, true); spawnCrashSmoke(pos, true);
-    spawnCrashFire(pos); spawnCrashFire(pos);
-    spawnWreckage(pos, 12);
-    spawnCrashPlume(pos);
-  }
-
-  function computeBanking(curYaw, curRoll, targetYaw, dt, opts) {
-    opts = opts || {};
-    const maxBank = opts.maxBank || 1.1;
-    const turnRate = opts.turnRate || 2.5;
-    const rollSpeed = opts.rollSpeed || 4;
-    let diff = targetYaw - curYaw;
-    while (diff >  Math.PI) diff -= 2 * Math.PI;
-    while (diff < -Math.PI) diff += 2 * Math.PI;
-    const yawDelta = diff * Math.min(1, dt * turnRate);
-    const newYaw = curYaw + yawDelta;
-    const yawRatePerSec = yawDelta / Math.max(dt, 0.001);
-    const targetRoll = -Math.max(-maxBank, Math.min(maxBank, yawRatePerSec * 0.35));
-    const newRoll = curRoll + (targetRoll - curRoll) * Math.min(1, dt * rollSpeed);
-    return { yaw: newYaw, roll: newRoll, yawDelta };
-  }
-
-  const crashing = [];
-  function startCrash(entity, kind) {
-    if (entity.crashing) return;
-    entity.crashing = true;
-    entity.crashSpin = rnd(-3, 3);
-    entity.crashDir = V(rnd(-1, 1), 0, rnd(-1, 1)).normalize();
-    entity.cooldown = 9999; entity.missileCooldown = 9999;
-    if (entity.flames) for (const f of entity.flames) f.visible = false;
-    crashing.push({ entity, kind, t: 0 });
-    API.playSound('explosion');
-    console.log(`💥 ${kind} en picada`);
-  }
-  function updateCrashing(entry, dt) {
-    const e = entry.entity, mesh = e.mesh;
-    entry.t += dt;
-    const t = entry.t;
-    const P1 = 0.6, P2 = 3.0;
-    if (t < P1) {
-      mesh.rotation.x += dt * 0.5;
-      mesh.rotation.z += Math.sin(t * 10) * dt * 0.6;
-      mesh.position.y -= dt * 2;
-      if (Math.random() < 0.5) spawnCrashSmoke(mesh.position);
-    } else if (t < P2) {
-      mesh.rotation.y += e.crashSpin * dt;
-      mesh.rotation.z = Math.sin(t * 4) * 0.5;
-      mesh.rotation.x = Math.min(1.4, 0.3 + (t - P1) * 0.4);
-      mesh.position.x += e.crashDir.x * dt * 4;
-      mesh.position.z += e.crashDir.z * dt * 4;
-      mesh.position.y -= (6 + (t - P1) * 3) * dt;
-      spawnCrashSmoke(mesh.position);
-      if (Math.random() < 0.7) spawnCrashFire(mesh.position);
+  function showEndScreen(win) {
+    if (mod.gameOver) return;
+    mod.gameOver = true;
+    const t = document.getElementById('ov-title');
+    const s = document.getElementById('ov-sub');
+    if (win) {
+      t.textContent = '¡VICTORIA!';
+      t.style.color = '#4fc3ff';
+      s.textContent = 'Has destruido el cuartel enemigo';
     } else {
-      mesh.rotation.y += e.crashSpin * 2 * dt;
-      mesh.rotation.x = 1.4; mesh.rotation.z = 0.2;
-      mesh.position.y -= (20 + (t - P2) * 15) * dt;
-      spawnCrashSmoke(mesh.position); spawnCrashSmoke(mesh.position, true);
-      spawnCrashFire(mesh.position);
+      t.textContent = 'DERROTA';
+      t.style.color = '#ff4444';
+      s.textContent = 'Tu cuartel ha sido destruido';
     }
-    if (mesh.position.y <= 1.2 || t > 7) {
-      const pos = V(mesh.position.x, 1.2, mesh.position.z);
-      spawnImpactExplosion(pos);
-      mesh.visible = false;
-      entry.done = true;
-      setTimeout(() => { e.crashing = false; e.isDead = true; e.respawnTimer = 0; }, 100);
+    overlay.style.display = 'flex';
+  }
+
+  // ======================== HELPERS ========================
+  function addHealthBar(unit, yOffset, width) {
+    const g = new THREE.Group();
+    const bg = new THREE.Mesh(new THREE.PlaneGeometry(width, 0.25),
+      new THREE.MeshBasicMaterial({ color: 0xff0000, depthTest: false }));
+    const fg = new THREE.Mesh(new THREE.PlaneGeometry(width, 0.25),
+      new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false }));
+    fg.position.z = 0.01;
+    g.add(bg); g.add(fg);
+    g.renderOrder = 999;
+    API.scene.add(g);
+    unit.hpGroup = g;
+    unit.hpBar = fg;
+    unit.hpYOffset = yOffset;
+    unit.hpWidth = width;
+  }
+
+  // ======================== DECORACIÓN: MONTAÑAS LEJANAS ========================
+  function addDistantMountains() {
+    const matRock = new THREE.MeshLambertMaterial({ color: 0x6a7a6a });
+    const matSnow = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const g = new THREE.Group();
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2;
+      const rad = 260 + rnd(-15, 15);
+      const x = Math.cos(a) * rad;
+      const z = Math.sin(a) * rad;
+      const h = rnd(25, 55);
+      const r = rnd(18, 32);
+      const peak = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), matRock);
+      peak.position.set(x, h / 2 - 3, z);
+      peak.rotation.y = rnd(0, Math.PI);
+      g.add(peak);
+      // Nieve en la cima
+      const snow = new THREE.Mesh(new THREE.ConeGeometry(r * 0.42, h * 0.32, 5), matSnow);
+      snow.position.set(x, h - h * 0.16 - 3, z);
+      snow.rotation.y = peak.rotation.y;
+      g.add(snow);
+    }
+    API.scene.add(g);
+  }
+
+  // ======================== CUARTEL HQ ========================
+  function buildHQ(team, x, z) {
+    const color = team === 'ally' ? 0x0055ff : 0xff2222;
+    const mat      = new THREE.MeshLambertMaterial({ color });
+    const matDark  = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+    const matConc  = new THREE.MeshLambertMaterial({ color: 0x8a8a80 });
+
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    API.scene.add(g);
+
+    const add = (w, h, d, m, xx, yy, zz) => {
+      const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      o.position.set(xx, yy, zz);
+      o.castShadow = true; o.receiveShadow = true;
+      g.add(o);
+      return o;
+    };
+
+    // Plataforma de hormigón
+    add(26, 0.5, 26, matConc, 0, 0.25, 0);
+
+    // Murallas
+    add(26, 3.5, 0.9, mat, 0, 2.0, -12.5);
+    add(26, 3.5, 0.9, mat, 0, 2.0,  12.5);
+    add(0.9, 3.5, 26, mat, -12.5, 2.0, 0);
+    add(0.9, 3.5, 26, mat,  12.5, 2.0, 0);
+
+    // Torretas de esquina
+    for (const [cx, cz] of [[-12, -12], [12, -12], [-12, 12], [12, 12]]) {
+      add(3.2, 6, 3.2, matDark, cx, 3, cz);
+      const canon = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.28, 4.5, 10),
+        new THREE.MeshLambertMaterial({ color: 0x111111 })
+      );
+      canon.rotation.x = Math.PI / 2;
+      canon.position.set(cx, 5, cz);
+      g.add(canon);
+    }
+
+    // Búnker central
+    add(9, 9, 9, matConc, 0, 4.5, 0);
+    add(9.6, 0.6, 9.6, mat, 0, 9.3, 0);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      add(0.5, 9.5, 0.5, matDark, Math.cos(a) * 4.4, 4.75, Math.sin(a) * 4.4);
+    }
+
+    // Mástil y radar
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 7, 8), matDark);
+    mast.position.set(0, 13, 0);
+    g.add(mast);
+
+    const radarGroup = new THREE.Group();
+    radarGroup.position.set(0, 15.5, 0);
+    const radar = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.15, 1.1),
+      new THREE.MeshLambertMaterial({ color: 0xaaaaaa }));
+    radar.rotation.x = 0.4;
+    radarGroup.add(radar);
+    g.add(radarGroup);
+
+    // Bandera
+    const bandera = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.4),
+      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    bandera.position.set(0, 13.5, 0.5);
+    g.add(bandera);
+
+    const hq = {
+      type: 'hq', team, mesh: g,
+      hp: 3000, maxHp: 3000, radius: 14,
+      isDead: false, radarGroup, bandera,
+      basePos: V(x, 0, z),
+    };
+    addHealthBar(hq, 20, 18);
+    mod.hqs.push(hq);
+    return hq;
+  }
+
+  // ======================== AEROPUERTO ========================
+  function buildAirport(team, x, z, rotY) {
+    const color = team === 'ally' ? 0x0055ff : 0xff2222;
+    const matAccent = new THREE.MeshLambertMaterial({ color });
+    const matAsphalt = new THREE.MeshLambertMaterial({ color: 0x252525 });
+    const matConc    = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
+    const matMetal   = new THREE.MeshLambertMaterial({ color: 0x555555 });
+    const matGlass   = new THREE.MeshLambertMaterial({ color: 0x2a5a7a, emissive: 0x0a2030 });
+
+    const g = new THREE.Group();
+    g.position.set(x, 0.02, z);
+    g.rotation.y = rotY;
+    API.scene.add(g);
+
+    const add = (w, h, d, m, xx, yy, zz) => {
+      const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      o.position.set(xx, yy, zz);
+      o.castShadow = true; o.receiveShadow = true;
+      g.add(o);
+      return o;
+    };
+
+    // -------- PISTA --------
+    const runway = new THREE.Mesh(new THREE.PlaneGeometry(16, 100), matAsphalt);
+    runway.rotation.x = -Math.PI / 2;
+    runway.position.set(0, 0.02, 0);
+    runway.receiveShadow = true;
+    g.add(runway);
+
+    // Marcas centrales
+    for (let i = -7; i <= 7; i++) {
+      const marca = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 3.5),
+        new THREE.MeshBasicMaterial({ color: 0xdddddd }));
+      marca.rotation.x = -Math.PI / 2;
+      marca.position.set(0, 0.04, i * 6.5);
+      g.add(marca);
+    }
+    // Umbrales
+    for (const zEnd of [-47, 47]) {
+      for (let i = -3; i <= 3; i++) {
+        const u = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 3.5),
+          new THREE.MeshBasicMaterial({ color: 0xdddddd }));
+        u.rotation.x = -Math.PI / 2;
+        u.position.set(i * 2.4, 0.04, zEnd);
+        g.add(u);
+      }
+    }
+    // Luces
+    for (let i = -8; i <= 8; i++) {
+      for (const xx of [-8.5, 8.5]) {
+        const luz = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6),
+          new THREE.MeshBasicMaterial({ color: i % 2 ? 0xffaa00 : 0x00ff88 }));
+        luz.position.set(xx, 0.16, i * 6);
+        g.add(luz);
+      }
+    }
+
+    // -------- HANGARES --------
+    for (const hx of [-24, 24]) {
+      const hz = 6;
+      add(16, 0.5, 16, matConc, hx, 0.25, hz);
+      add(16, 5.5, 0.6, matMetal, hx, 3, hz - 8);
+      add(16, 5.5, 0.6, matMetal, hx, 3, hz + 8);
+      add(0.6, 5.5, 16, matMetal, hx - 8, 3, hz);
+      add(15, 4.6, 0.5, matAccent, hx, 2.6, hz + 8.1);
+      // Techo inclinado
+      const t1 = new THREE.Mesh(new THREE.BoxGeometry(16, 0.5, 9), matMetal);
+      t1.position.set(hx, 6.2, hz - 4);
+      t1.rotation.x = -0.35;
+      g.add(t1);
+      const t2 = new THREE.Mesh(new THREE.BoxGeometry(16, 0.5, 9), matMetal);
+      t2.position.set(hx, 6.2, hz + 4);
+      t2.rotation.x = 0.35;
+      g.add(t2);
+    }
+
+    // -------- TORRE DE CONTROL --------
+    const tx = -32, tz = -16;
+    add(7, 15, 7, matConc, tx, 7.5, tz);
+    add(9, 3.5, 9, matGlass, tx, 17, tz);
+    add(9.5, 0.5, 9.5, matMetal, tx, 19, tz);
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5, 6), matMetal);
+    ant.position.set(tx, 21.8, tz);
+    g.add(ant);
+
+    const radarPivot = new THREE.Group();
+    radarPivot.position.set(tx, 23.5, tz);
+    const radar = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.15, 0.8), matMetal);
+    radarPivot.add(radar);
+    g.add(radarPivot);
+
+    // -------- DEPÓSITOS DE COMBUSTIBLE --------
+    for (let i = 0; i < 3; i++) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.5, 16), matMetal);
+      tank.position.set(-28 + i * 6.5, 2.25, 20);
+      tank.castShadow = true;
+      g.add(tank);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(2.7, 2.7, 0.35, 16), matAccent);
+      cap.position.set(-28 + i * 6.5, 4.65, 20);
+      g.add(cap);
+    }
+
+    return { team, mesh: g, x, z, rotY, radarPivot };
+  }
+
+  // ======================== CAZA (Fighter) ========================
+  function buildFighter(color, team, x, z) {
+    const matBody   = new THREE.MeshLambertMaterial({ color });
+    const matDark   = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+    const matGlass  = new THREE.MeshLambertMaterial({ color: 0x0e1a2a });
+    const matMetal  = new THREE.MeshLambertMaterial({ color: 0x666666 });
+
+    const g = new THREE.Group();
+    const add = (geo, mat, x, y, z, rx, ry, rz) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      if (rx) m.rotation.x = rx;
+      if (ry) m.rotation.y = ry;
+      if (rz) m.rotation.z = rz;
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
+
+    // Fuselaje (nose at +Z)
+    add(new THREE.BoxGeometry(1.7, 1.4, 9), matBody, 0, 0, 0);
+    add(new THREE.BoxGeometry(1.3, 1.0, 3.5), matBody, 0, 0.1, -5.5);
+
+    // Nariz
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.2, 10), matBody);
+    nose.rotation.x = Math.PI / 2;   // apuntando a +Z
+    nose.position.set(0, 0, 5.5);
+    nose.castShadow = true;
+    g.add(nose);
+
+    // Punta roja
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.8, 10),
+      new THREE.MeshBasicMaterial({ color: 0xcc2222 }));
+    tip.rotation.x = Math.PI / 2;
+    tip.position.set(0, 0, 7.2);
+    g.add(tip);
+
+    // Cabina
+    add(new THREE.BoxGeometry(0.95, 0.75, 2.8), matGlass, 0, 0.9, -0.8);
+    add(new THREE.BoxGeometry(0.95, 0.45, 1.5), matGlass, 0, 0.98, 1.4);
+
+    // Alas con flecha
+    const wl = add(new THREE.BoxGeometry(4.2, 0.32, 2.8), matBody, -2.6, 0, 0.6);
+    wl.rotation.z = 0.14;
+    const wr = add(new THREE.BoxGeometry(4.2, 0.32, 2.8), matBody,  2.6, 0, 0.6);
+    wr.rotation.z = -0.14;
+
+    // Puntas de ala
+    add(new THREE.BoxGeometry(0.85, 0.45, 1.4), matDark, -4.6, 0.2, 1.0);
+    add(new THREE.BoxGeometry(0.85, 0.45, 1.4), matDark,  4.6, 0.2, 1.0);
+
+    // Misiles aire-aire bajo las alas
+    for (const wx of [-3.0, 3.0]) {
+      for (const wz of [0.2, 1.4]) {
+        const msl = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 2.8, 8), matMetal);
+        msl.rotation.x = Math.PI / 2;
+        msl.position.set(wx, -0.45, wz);
+        g.add(msl);
+        // Punta
+        const t = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 8), matDark);
+        t.rotation.x = Math.PI / 2;
+        t.position.set(wx, -0.45, wz + 1.65);
+        g.add(t);
+      }
+    }
+
+    // Timón vertical
+    const tailV = add(new THREE.BoxGeometry(0.32, 2.6, 2), matBody, 0, 1.5, -4.5);
+    tailV.rotation.x = -0.25;
+
+    // Estabilizador horizontal
+    add(new THREE.BoxGeometry(3.8, 0.28, 1.3), matBody, 0, 0, -4.8);
+
+    // Motores gemelos
+    for (const ex of [-0.7, 0.7]) {
+      const eng = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 2, 12), matDark);
+      eng.rotation.x = Math.PI / 2;
+      eng.position.set(ex, -0.2, -5.5);
+      g.add(eng);
+    }
+
+    // Postquemadores
+    const flames = [];
+    for (const ex of [-0.7, 0.7]) {
+      const f = new THREE.Mesh(
+        new THREE.ConeGeometry(0.42, 1.8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.85 })
+      );
+      f.rotation.x = -Math.PI / 2;
+      f.position.set(ex, -0.2, -7.0);
+      g.add(f);
+      flames.push(f);
+    }
+
+    API.scene.add(g);
+
+    const unit = {
+      type: 'plane', team, mesh: g,
+      hp: 90, maxHp: 90, radius: 4.5, speed: 55,
+      isDead: false, respawnTimer: 0,
+      basePos: V(x, 32, z),
+      targetPos: V(x, 32, z),
+      cooldown: 0, missileCooldown: 0,
+      flames,
+      state: 'patrol',
+      patrolAngle: Math.random() * Math.PI * 2,
+      patrolRadius: rnd(60, 110),
+      yaw: team === 'ally' ? 0 : Math.PI,
+      pitch: 0, roll: 0,
+    };
+    unit.mesh.rotation.order = 'YXZ';
+    addHealthBar(unit, 3.5, 3.2);
+    mod.planes.push(unit);
+    return unit;
+  }
+
+  // ======================== HELICÓPTERO DE ATAQUE ========================
+  function buildAttackHeli(color, team, x, z) {
+    const matBody   = new THREE.MeshLambertMaterial({ color });
+    const matDark   = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+    const matGlass  = new THREE.MeshLambertMaterial({ color: 0x0e1a2a });
+    const matMetal  = new THREE.MeshLambertMaterial({ color: 0x666666 });
+    const matRotor  = new THREE.MeshBasicMaterial({ color: 0x111111 });
+
+    const g = new THREE.Group();
+    const add = (geo, mat, x, y, z, rx, ry, rz) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      if (rx) m.rotation.x = rx;
+      if (ry) m.rotation.y = ry;
+      if (rz) m.rotation.z = rz;
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
+
+    // Fuselaje
+    add(new THREE.BoxGeometry(2.6, 2.1, 6), matBody, 0, 0, 0);
+    // Nariz
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(1.3, 2.2, 12), matBody);
+    nose.rotation.x = Math.PI / 2;
+    nose.position.set(0, 0, 4);
+    nose.castShadow = true;
+    g.add(nose);
+
+    // Cabina de cristal
+    add(new THREE.BoxGeometry(2.0, 1.5, 1.7), matGlass, 0, 0.35, 1.8);
+
+    // Cola
+    add(new THREE.BoxGeometry(0.7, 0.7, 5), matBody, 0, 0.3, -5.5);
+    // Estabilizador de cola
+    add(new THREE.BoxGeometry(3.2, 0.16, 1.1), matBody, 0, 0.3, -7.2);
+
+    // Rotor de cola
+    const rotorTail = new THREE.Group();
+    rotorTail.position.set(0.45, 0.3, -8);
+    const tailBlade1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), matRotor);
+    const tailBlade2 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.1, 2.4), matRotor);
+    rotorTail.add(tailBlade1); rotorTail.add(tailBlade2);
+    g.add(rotorTail);
+
+    // Patines
+    for (const sx of [-1.05, 1.05]) {
+      add(new THREE.BoxGeometry(0.16, 0.16, 4.5), matMetal, sx, -1.5, 0.5);
+      add(new THREE.BoxGeometry(0.16, 1.3, 0.16), matMetal, sx, -0.75, -1.4);
+      add(new THREE.BoxGeometry(0.16, 1.3, 0.16), matMetal, sx, -0.75, 2.2);
+    }
+
+    // Rotor principal (4 aspas)
+    const rotorMain = new THREE.Group();
+    rotorMain.position.set(0, 1.5, 0);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.9, 8), matDark);
+    mast.position.y = 0.45;
+    rotorMain.add(mast);
+    for (let i = 0; i < 4; i++) {
+      const bg = new THREE.BoxGeometry(0.3, 0.06, 6.5);
+      bg.translate(0, 0, 3.25);
+      const blade = new THREE.Mesh(bg, matRotor);
+      blade.rotation.y = (i / 4) * Math.PI * 2;
+      blade.position.y = 0.9;
+      rotorMain.add(blade);
+    }
+    g.add(rotorMain);
+
+    // Alas con armas
+    add(new THREE.BoxGeometry(6, 0.22, 0.9), matBody, 0, -0.2, 0.6);
+
+    // Pods de cohetes
+    for (const wx of [-2.4, -1.6, 1.6, 2.4]) {
+      const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 1.7, 8), matDark);
+      pod.rotation.x = Math.PI / 2;
+      pod.position.set(wx, -0.65, 0.9);
+      g.add(pod);
+      for (let r = 0; r < 4; r++) {
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.12, 6),
+          new THREE.MeshBasicMaterial({ color: 0x000000 }));
+        tube.rotation.x = Math.PI / 2;
+        tube.position.set(wx - 0.15 + (r % 2) * 0.3, -0.65 + (r < 2 ? 0.15 : -0.15), 1.78);
+        g.add(tube);
+      }
+    }
+
+    // Cañón bajo la nariz (torreta)
+    const turret = new THREE.Group();
+    const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 1.4, 8), matDark);
+    cannon.rotation.x = Math.PI / 2;
+    cannon.position.set(0, 0, 0.5);
+    turret.add(cannon);
+    turret.position.set(0, -1.0, 2.6);
+    g.add(turret);
+
+    // Motores
+    for (const ex of [-0.8, 0.8]) {
+      add(new THREE.CylinderGeometry(0.42, 0.42, 1.2, 8), matDark, ex, 0.7, -2.8);
+    }
+
+    // Sensor / cámara
+    add(new THREE.BoxGeometry(0.5, 0.5, 0.7), matDark, 0, 1.0, 3.2);
+
+    API.scene.add(g);
+
+    const unit = {
+      type: 'heli', team, mesh: g,
+      hp: 160, maxHp: 160, radius: 3.5, speed: 22,
+      isDead: false, respawnTimer: 0,
+      basePos: V(x, 20, z),
+      targetPos: V(x, 20, z),
+      cooldown: 0, missileCooldown: 0,
+      rotorMain, rotorTail, turret,
+      state: 'patrol',
+      strafeTimer: Math.random() * 6,
+      patrolAngle: Math.random() * Math.PI * 2,
+      yaw: 0,
+    };
+    unit.mesh.rotation.order = 'YXZ';
+    addHealthBar(unit, 3.5, 3);
+    mod.helis.push(unit);
+    return unit;
+  }
+
+  // ======================== CREAR EL MUNDO ========================
+  addDistantMountains();
+  const allyHQ  = buildHQ('ally',  0, -100);
+  const enemyHQ = buildHQ('enemy', 0,  100);
+  const allyAirport  = buildAirport('ally',  -78, -52, 0);
+  const enemyAirport = buildAirport('enemy',  78,  52, Math.PI);
+
+  // Cazas
+  for (let i = 0; i < 3; i++) {
+    buildFighter(0x0055ff, 'ally',  -78 + (i - 1) * 6, -70);
+    buildFighter(0xff2222, 'enemy',  78 + (i - 1) * 6,  70);
+  }
+  // Helicópteros de ataque
+  for (let i = 0; i < 2; i++) {
+    buildAttackHeli(0x0055ff, 'ally',  -55 + i * 12, -80);
+    buildAttackHeli(0xff2222, 'enemy',  55 - i * 12,  80);
+  }
+
+  // ======================== ACTUALIZACIÓN ========================
+  const _d = new THREE.Vector3();
+  const _p = new THREE.Vector3();
+
+  function updatePlane(p, dt) {
+    if (p.isDead) {
+      p.respawnTimer += dt;
+      p.mesh.visible = false;
+      if (p.respawnTimer > 15) {
+        p.hp = p.maxHp; p.isDead = false;
+        p.mesh.visible = true;
+        p.mesh.position.copy(p.basePos);
+        p.respawnTimer = 0;
+      }
+      return;
+    }
+
+    p.cooldown -= dt;
+    p.missileCooldown -= dt;
+
+    // Buscar objetivos (aviones/helicópteros enemigos)
+    let target = null, tDist = 1e9;
+    for (const cand of mod.planes.concat(mod.helis)) {
+      if (cand.team === p.team || cand.isDead) continue;
+      const d = p.mesh.position.distanceTo(cand.mesh.position);
+      if (d < tDist) { tDist = d; target = cand; }
+    }
+
+    // Buscar objetivo terrestre si no hay aéreo
+    let groundTarget = null, gDist = 1e9;
+    if (!target) {
+      for (const s of API.soldiers) {
+        if (s.team === p.team || s.hp <= 0) continue;
+        const d = p.mesh.position.distanceTo(s.mesh.position);
+        if (d < gDist) { gDist = d; groundTarget = s; }
+      }
+    }
+
+    // Movimiento
+    const altBase = 32;
+    if (target && tDist < 180) {
+      p.patrolAngle += dt * 0.5;
+      _d.copy(target.mesh.position);
+      _d.y = altBase;
+      _d.x += Math.cos(p.patrolAngle * 3) * 25;
+      _d.z += Math.sin(p.patrolAngle * 3) * 25;
+    } else {
+      p.patrolAngle += dt * 0.15;
+      const cx = 0, cz = p.team === 'ally' ? -30 : 30;
+      _d.set(
+        cx + Math.cos(p.patrolAngle) * p.patrolRadius,
+        altBase,
+        cz + Math.sin(p.patrolAngle) * p.patrolRadius
+      );
+    }
+
+    const dir = _p.copy(_d).sub(p.mesh.position);
+    const dist = dir.length();
+    if (dist > 0.5) {
+      dir.normalize();
+      p.mesh.position.addScaledVector(dir, Math.min(p.speed * dt, dist));
+      const yawTarget = Math.atan2(dir.x, dir.z);
+      let diff = yawTarget - p.yaw;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      p.yaw += diff * Math.min(1, dt * 4);
+      p.pitch += (-dir.y * 0.8 - p.pitch) * Math.min(1, dt * 3);
+      p.roll  += (-diff * 1.4 - p.roll) * Math.min(1, dt * 3);
+      p.mesh.rotation.y = p.yaw;
+      p.mesh.rotation.x = p.pitch;
+      p.mesh.rotation.z = p.roll;
+    }
+
+    // Disparar cañón
+    if (target && p.cooldown <= 0 && tDist < 160) {
+      const muzzle = p.mesh.position.clone();
+      API.fireProjectile(muzzle, target.mesh.position.clone(), 0xffff44, 22, p.team);
+      API.playSound('shot');
+      p.cooldown = 0.12;
+    } else if (groundTarget && p.cooldown <= 0 && gDist < 60) {
+      const muzzle = p.mesh.position.clone();
+      API.fireProjectile(muzzle, groundTarget.mesh.position.clone(), 0xffff44, 15, p.team);
+      API.playSound('shot');
+      p.cooldown = 0.25;
+    }
+
+    // Misiles
+    if (target && p.missileCooldown <= 0 && tDist < 130 && tDist > 25) {
+      const muzzle = p.mesh.position.clone();
+      API.fireProjectile(muzzle, target.mesh.position.clone(), 0xff6600, 60, p.team);
+      API.playSound('explosion');
+      p.missileCooldown = 3.5;
+    }
+
+    // Animación de llamas
+    for (const f of p.flames) f.scale.setScalar(0.7 + Math.random() * 0.6);
+
+    // Destrucción
+    if (p.hp <= 0) {
+      p.isDead = true;
+      p.respawnTimer = 0;
+      API.playSound('explosion');
+      // Explosión visual
+      API.scene.remove(p.mesh);
+      API.scene.add(p.mesh);
     }
   }
 
-  // API PÚBLICA
-  window.ModelosHD = {
-    version: '3.2',
-    plane: (c) => buildPlane(c),
-    heli: (c) => buildHeli(c),
-    tank: (c) => buildTank(c),
-    apc: (c) => buildAPC(c),
-    buildPlane, buildHeli, buildTank, buildAPC,
-    computeBanking, startCrash,
-    isCrashing: (e) => !!e.crashing,
-    crashFX,
-  };
-
-  // Preservar userData en TODOS los submeshes
-  function tagUserData(group, unit) {
-    group.traverse(c => { if (c.isMesh) c.userData = unit; });
-  }
-
-  function upgradeBaseHelis() {
-    if (!API.aiHelis || !API.aiHelis.length) return;
-    let count = 0;
-    for (const h of API.aiHelis) {
-      try {
-        const oldMesh = h.mesh; if (!oldMesh) continue;
-        const oldPos = oldMesh.position.clone();
-        const oldRotY = oldMesh.rotation.y;
-        let color = 0x0055ff;
-        oldMesh.traverse(c => {
-          if (c.isMesh && c.material && c.material.color) {
-            const hex = c.material.color.getHex();
-            if (hex !== 0x000000 && hex !== 0x111111 && hex !== 0x222222) color = hex;
-          }
-        });
-        const result = buildHeli(color);
-        result.group.position.copy(oldPos);
-        result.group.rotation.y = oldRotY;
-        API.scene.remove(oldMesh);
-        API.scene.add(result.group);
-        h.mesh = result.group;
-        h.rotor = result.rotorMain;
-        h.yaw = oldRotY; h.roll = 0; h.pitch = 0;
-        tagUserData(result.group, h);
-        count++;
-      } catch (e) { console.error('Error upgrading heli:', e); }
+  function updateHeli(h, dt) {
+    if (h.isDead) {
+      h.respawnTimer += dt;
+      h.mesh.visible = false;
+      if (h.respawnTimer > 12) {
+        h.hp = h.maxHp; h.isDead = false;
+        h.mesh.visible = true;
+        h.mesh.position.copy(h.basePos);
+        h.respawnTimer = 0;
+      }
+      return;
     }
-    if (count) console.log(`🎨 ${count} helicópteros base actualizados a HD`);
-  }
 
-  function upgradeBaseTanks() {
-    if (!API.tanks || !API.tanks.length) return;
-    let count = 0;
-    for (const t of API.tanks) {
-      try {
-        const oldMesh = t.mesh; if (!oldMesh) continue;
-        const oldPos = oldMesh.position.clone();
-        const oldRotY = oldMesh.rotation.y;
-        let color = 0x0055ff;
-        oldMesh.traverse(c => {
-          if (c.isMesh && c.material && c.material.color) {
-            const hex = c.material.color.getHex();
-            if (hex !== 0x000000 && hex !== 0x222222) color = hex;
-          }
-        });
-        const result = buildTank(color);
-        result.group.position.copy(oldPos);
-        result.group.rotation.y = oldRotY;
-        API.scene.remove(oldMesh);
-        API.scene.add(result.group);
-        t.mesh = result.group;
-        t.turret = result.turret;
-        tagUserData(result.group, t);
-        count++;
-      } catch (e) { console.error('Error upgrading tank:', e); }
+    if (h.rotorMain) h.rotorMain.rotation.y += 40 * dt;
+    if (h.rotorTail) h.rotorTail.rotation.x += 45 * dt;
+
+    h.cooldown -= dt;
+    h.missileCooldown -= dt;
+
+    // Buscar objetivo (aéreo)
+    let target = null, tDist = 1e9;
+    for (const cand of mod.planes.concat(mod.helis)) {
+      if (cand.team === h.team || cand.isDead) continue;
+      const d = h.mesh.position.distanceTo(cand.mesh.position);
+      if (d < tDist) { tDist = d; target = cand; }
     }
-    if (count) console.log(`🎨 ${count} tanques base actualizados a HD`);
-  }
 
-  function upgradeBaseAPCs() {
-    if (!API.vehicles || !API.vehicles.length) return;
-    let count = 0;
-    for (const v of API.vehicles) {
-      try {
-        if (v.type !== 'apc') continue;
-        // ⚠️ FIX CRÍTICO: NO reemplazar la artillería creada por ia_mejorada.js
-        if (v.isArtilleria) continue;
-        const oldMesh = v.mesh; if (!oldMesh) continue;
-        const oldPos = oldMesh.position.clone();
-        const oldRotY = oldMesh.rotation.y;
-        let color = 0x0055ff;
-        oldMesh.traverse(c => {
-          if (c.isMesh && c.material && c.material.color) {
-            const hex = c.material.color.getHex();
-            if (hex !== 0x000000 && hex !== 0x111111 && hex !== 0x222222) color = hex;
-          }
-        });
-        const result = buildAPC(color);
-        result.group.position.copy(oldPos);
-        result.group.rotation.y = oldRotY;
-        API.scene.remove(oldMesh);
-        API.scene.add(result.group);
-        v.mesh = result.group;
-        v.turret = result.turret;
-        tagUserData(result.group, v);
-        count++;
-      } catch (e) { console.error('Error upgrading APC:', e); }
+    // Objetivos terrestres
+    let gTarget = null, gDist = 1e9;
+    if (!target || tDist > 90) {
+      for (const s of API.soldiers) {
+        if (s.team === h.team || s.hp <= 0) continue;
+        const d = h.mesh.position.distanceTo(s.mesh.position);
+        if (d < gDist) { gDist = d; gTarget = s; }
+      }
+      for (const v of API.vehicles.concat(API.tanks)) {
+        if (v.team === h.team || v.hp <= 0) continue;
+        const d = h.mesh.position.distanceTo(v.mesh.position);
+        if (d < gDist) { gDist = d; gTarget = v; }
+      }
     }
-    if (count) console.log(`🎨 ${count} APCs base actualizados a HD`);
+
+    const altBase = 18;
+    if (target && tDist < 160) {
+      h.strafeTimer += dt;
+      _d.copy(target.mesh.position);
+      _d.y = altBase;
+      _d.x += Math.cos(h.strafeTimer * 1.5) * 30;
+      _d.z += Math.sin(h.strafeTimer * 1.5) * 30;
+    } else if (gTarget) {
+      h.strafeTimer += dt;
+      _d.copy(gTarget.mesh.position);
+      _d.y = altBase;
+      _d.x += Math.cos(h.strafeTimer * 1.2) * 28;
+      _d.z += Math.sin(h.strafeTimer * 1.2) * 28;
+    } else {
+      h.patrolAngle += dt * 0.3;
+      const cz = h.team === 'ally' ? -20 : 20;
+      _d.set(
+        Math.cos(h.patrolAngle) * 60,
+        altBase + Math.sin(h.patrolAngle * 2) * 5,
+        cz + Math.sin(h.patrolAngle) * 60
+      );
+    }
+
+    const dir = _p.copy(_d).sub(h.mesh.position);
+    const dist = dir.length();
+    if (dist > 0.5) {
+      dir.normalize();
+      h.mesh.position.addScaledVector(dir, Math.min(h.speed * dt, dist));
+      const yawT = Math.atan2(dir.x, dir.z);
+      let diff = yawT - h.yaw;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      h.yaw += diff * Math.min(1, dt * 3);
+      h.mesh.rotation.y = h.yaw;
+      h.mesh.rotation.z = -diff * 0.6;
+    }
+
+    // Apuntar torreta al objetivo
+    if (h.turret && target) {
+      const dx = target.mesh.position.x - h.mesh.position.x;
+      const dz = target.mesh.position.z - h.mesh.position.z;
+      const relYaw = Math.atan2(dx, dz) - h.yaw;
+      h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
+    } else if (h.turret && gTarget) {
+      const dx = gTarget.mesh.position.x - h.mesh.position.x;
+      const dz = gTarget.mesh.position.z - h.mesh.position.z;
+      const relYaw = Math.atan2(dx, dz) - h.yaw;
+      h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
+    }
+
+    // Disparar cañón
+    if (target && h.cooldown <= 0 && tDist < 90) {
+      const muzzle = h.mesh.position.clone(); muzzle.y -= 0.5;
+      API.fireProjectile(muzzle, target.mesh.position.clone(), 0xffff00, 12, h.team);
+      API.playSound('shot');
+      h.cooldown = 0.18;
+    } else if (gTarget && h.cooldown <= 0 && gDist < 70) {
+      const muzzle = h.mesh.position.clone(); muzzle.y -= 0.5;
+      API.fireProjectile(muzzle, gTarget.mesh.position.clone(), 0xffff00, 15, h.team);
+      API.playSound('shot');
+      h.cooldown = 0.2;
+    }
+
+    // Misiles
+    if (target && h.missileCooldown <= 0 && tDist < 100 && tDist > 20) {
+      API.fireProjectile(h.mesh.position.clone(), target.mesh.position.clone(), 0xff4400, 70, h.team);
+      API.playSound('explosion');
+      h.missileCooldown = 4;
+    }
+
+    if (h.hp <= 0) {
+      h.isDead = true;
+      h.respawnTimer = 0;
+      API.playSound('explosion');
+    }
   }
 
-  setTimeout(() => {
-    upgradeBaseHelis();
-    upgradeBaseTanks();
-    upgradeBaseAPCs();
-  }, 80);
+  // Resolución de daño: proyectiles del juego vs. unidades del mod
+  function resolveModDamage() {
+    const all = [...mod.planes, ...mod.helis, ...mod.hqs];
+    for (let i = API.projectiles.length - 1; i >= 0; i--) {
+      const p = API.projectiles[i];
+      if (!p || !p.mesh) continue;
+      for (const u of all) {
+        if (u.isDead) continue;
+        if (u.team === p.team) continue;
+        const r = (u.radius || 4) + 1.5;
+        if (p.mesh.position.distanceTo(u.mesh.position) < r) {
+          u.hp -= p.damage;
+          API.scene.remove(p.mesh);
+          API.projectiles.splice(i, 1);
+          break;
+        }
+      }
+    }
+  }
 
+  function updateHQHUD() {
+    const ally = mod.hqs.find(h => h.team === 'ally');
+    const enemy = mod.hqs.find(h => h.team === 'enemy');
+    if (ally) {
+      const pct = Math.max(0, ally.hp / ally.maxHp * 100);
+      document.getElementById('hq-ally-bar').style.width = pct + '%';
+      document.getElementById('hq-ally-txt').textContent = Math.round(pct) + '%';
+    }
+    if (enemy) {
+      const pct = Math.max(0, enemy.hp / enemy.maxHp * 100);
+      document.getElementById('hq-enemy-bar').style.width = pct + '%';
+      document.getElementById('hq-enemy-txt').textContent = Math.round(pct) + '%';
+    }
+  }
+
+  function checkWinLose() {
+    const ally = mod.hqs.find(h => h.team === 'ally');
+    const enemy = mod.hqs.find(h => h.team === 'enemy');
+    if (ally && ally.hp <= 0 && !ally.isDead) { ally.isDead = true; showEndScreen(false); }
+    if (enemy && enemy.hp <= 0 && !enemy.isDead) { enemy.isDead = true; showEndScreen(true); }
+  }
+
+  // ======================== HOOK ========================
   const prevOnUpdate = API.onUpdate;
   API.onUpdate = function (dt) {
     if (typeof prevOnUpdate === 'function') {
       try { prevOnUpdate(dt); } catch (e) { console.error(e); }
     }
-    crashFX.update(dt);
-    for (let i = crashing.length - 1; i >= 0; i--) {
-      const entry = crashing[i];
-      try { updateCrashing(entry, dt); } catch (e) { console.error('crash err', e); }
-      if (entry.done) crashing.splice(i, 1);
-    }
-    if (API.aiHelis) {
-      for (const h of API.aiHelis) {
-        if (!h.mesh || h.isDead || h.crashing) continue;
-        const curYaw = h.mesh.rotation.y;
-        if (h.prevYaw === undefined) h.prevYaw = curYaw;
-        let yawDelta = curYaw - h.prevYaw;
-        while (yawDelta >  Math.PI) yawDelta -= 2 * Math.PI;
-        while (yawDelta < -Math.PI) yawDelta += 2 * Math.PI;
-        h.prevYaw = curYaw;
-        const targetRoll = -Math.max(-1.4, Math.min(1.4, yawDelta / Math.max(dt, 0.001) * 0.5));
-        h.roll = (h.roll || 0) + (targetRoll - (h.roll || 0)) * Math.min(1, dt * 5);
-        h.mesh.rotation.z = h.roll;
-      }
-    }
+    if (mod.gameOver) return;
+
+    for (const hq of mod.hqs) if (hq.radarGroup) hq.radarGroup.rotation.y += dt * 0.9;
+    for (const ap of [allyAirport, enemyAirport]) if (ap.radarPivot) ap.radarPivot.rotation.y += dt * 1.3;
+
+    for (const p of mod.planes) updatePlane(p, dt);
+    for (const h of mod.helis) updateHeli(h, dt);
+
+    resolveModDamage();
+    updateHQHUD();
+    checkWinLose();
   };
 
-  console.log('🎨 Mod Modelos HD v3.2 listo (artillería preservada)');
+  window.AirConquestMod = {
+    version: '1.0',
+    hqs: mod.hqs,
+    planes: mod.planes,
+    helis: mod.helis,
+  };
+
+  console.log(`✈️ Mod Aire y Conquista v1.0 listo — ${mod.planes.length} cazas, ${mod.helis.length} helicópteros, ${mod.hqs.length} cuarteles.`);
 })();
