@@ -1,8 +1,13 @@
 /* ============================================================
-   MOD: Aire y Conquista v1.0
-   Añade: aeropuertos, cazas, helicópteros de ataque, cuarteles HQ,
-   HUD de bases y condiciones de victoria/derrota.
-   Uso: colócalo como modificaciones/aire_conquista.js
+   MOD: Aire y Conquista v2.0
+   Añade:
+     - Aeropuertos MILITARES detallados (terminal, taxiways, helipuerto)
+     - Mapa con río + 3 puentes + colinas + bosque + zona industrial
+     - Postes de luz, vallas, semáforos, chimeneas con humo
+     - Cazas y helicópteros con modelos mejorados
+     - Cuarteles HQ con detalles
+     - HUD de bases y victoria/derrota
+   Uso: colócalo como mods/DLC.js
    ============================================================ */
 (function () {
   if (window.__AIRCONQUEST_LOADED) { console.warn('⚠️ Mod ya cargado'); return; }
@@ -13,17 +18,18 @@
   const THREE = window.THREE;
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
+  const rndi = (a, b) => Math.floor(rnd(a, b + 1));
 
-  console.log('✈️ Mod Aire y Conquista v1.0: iniciando...');
-  API.say('✈️ Aire y Conquista v1.0 cargado');
+  console.log('✈️ Mod Aire y Conquista v2.0: iniciando...');
+  API.say('✈️ Aire y Conquista v2.0');
 
   // ======================== ESTADO ========================
   const mod = {
     planes: [],
     helis: [],
     hqs: [],
+    smokes: [],      // chimeneas con humo
     gameOver: false,
-    winner: null,
   };
 
   // ======================== HUD DE BASES ========================
@@ -96,29 +102,254 @@
     unit.hpWidth = width;
   }
 
-  // ======================== DECORACIÓN: MONTAÑAS LEJANAS ========================
+  // ======================== MONTAÑAS LEJANAS ========================
   function addDistantMountains() {
     const matRock = new THREE.MeshLambertMaterial({ color: 0x6a7a6a });
     const matSnow = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const g = new THREE.Group();
-    for (let i = 0; i < 22; i++) {
-      const a = (i / 22) * Math.PI * 2;
-      const rad = 260 + rnd(-15, 15);
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      const rad = 280 + rnd(-20, 20);
       const x = Math.cos(a) * rad;
       const z = Math.sin(a) * rad;
-      const h = rnd(25, 55);
-      const r = rnd(18, 32);
+      const h = rnd(30, 65);
+      const r = rnd(20, 36);
       const peak = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), matRock);
       peak.position.set(x, h / 2 - 3, z);
       peak.rotation.y = rnd(0, Math.PI);
       g.add(peak);
-      // Nieve en la cima
       const snow = new THREE.Mesh(new THREE.ConeGeometry(r * 0.42, h * 0.32, 5), matSnow);
       snow.position.set(x, h - h * 0.16 - 3, z);
       snow.rotation.y = peak.rotation.y;
       g.add(snow);
     }
     API.scene.add(g);
+  }
+
+  // ======================== RÍO + PUENTES ========================
+  function addRiver() {
+    const riverGroup = new THREE.Group();
+    // El río corre este-oeste por el medio, entre z=-10 y z=10
+    const river = new THREE.Mesh(
+      new THREE.PlaneGeometry(400, 26),
+      new THREE.MeshLambertMaterial({ color: 0x2a6fa8, transparent: true, opacity: 0.85 })
+    );
+    river.rotation.x = -Math.PI / 2;
+    river.position.set(0, 0.07, 0);
+    riverGroup.add(river);
+
+    // Orillas de arena
+    for (const zo of [-14, 14]) {
+      const bank = new THREE.Mesh(
+        new THREE.PlaneGeometry(400, 3),
+        new THREE.MeshLambertMaterial({ color: 0xd9c68f })
+      );
+      bank.rotation.x = -Math.PI / 2;
+      bank.position.set(0, 0.06, zo);
+      riverGroup.add(bank);
+    }
+
+    API.scene.add(riverGroup);
+
+    // ============ 3 PUENTES ============
+    const matBridge  = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
+    const matRailing = new THREE.MeshLambertMaterial({ color: 0x555555 });
+    const matPylon   = new THREE.MeshLambertMaterial({ color: 0x6a6a5a });
+
+    for (const px of [-90, 0, 90]) {
+      const bridge = new THREE.Group();
+      bridge.position.set(px, 0, 0);
+
+      // Tablero
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(20, 1.2, 30), matBridge);
+      deck.position.set(0, 1.2, 0);
+      deck.castShadow = true;
+      deck.receiveShadow = true;
+      bridge.add(deck);
+
+      // Barandas
+      for (const sx of [-10.2, 10.2]) {
+        const railing = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.4, 30), matRailing);
+        railing.position.set(sx, 2.4, 0);
+        bridge.add(railing);
+        // Postes verticales cada 3u
+        for (let i = -4; i <= 4; i++) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.6, 0.5), matRailing);
+          post.position.set(sx, 2.4, i * 3.5);
+          bridge.add(post);
+        }
+      }
+
+      // Pilares en el agua
+      for (const pz of [-10, 0, 10]) {
+        const pylon = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.9, 4, 8), matPylon);
+        pylon.position.set(0, -0.8, pz);
+        bridge.add(pylon);
+      }
+
+      // Arcos decorativos
+      for (const sx of [-5, 5]) {
+        const arc = new THREE.Mesh(new THREE.TorusGeometry(4, 0.4, 6, 10, Math.PI), matRailing);
+        arc.rotation.y = Math.PI / 2;
+        arc.position.set(sx, 1.5, 0);
+        bridge.add(arc);
+      }
+
+      API.scene.add(bridge);
+    }
+  }
+
+  // ======================== BOSQUE + COLINAS ========================
+  function addForestAndHills() {
+    const matTrunk = new THREE.MeshLambertMaterial({ color: 0x594630 });
+    const matLeaves1 = new THREE.MeshLambertMaterial({ color: 0x2f5f33 });
+    const matLeaves2 = new THREE.MeshLambertMaterial({ color: 0x3a7038 });
+    const matHill = new THREE.MeshLambertMaterial({ color: 0x5b7a3e });
+
+    // ---- Bosque al NE y NO ----
+    for (const center of [[-140, -100], [140, -100], [-140, 100], [140, 100]]) {
+      for (let i = 0; i < 24; i++) {
+        const x = center[0] + rnd(-35, 35);
+        const z = center[1] + rnd(-35, 35);
+        const tree = new THREE.Group();
+        tree.position.set(x, 0, z);
+
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 2.5, 6), matTrunk);
+        trunk.position.y = 1.25;
+        trunk.castShadow = true;
+        tree.add(trunk);
+
+        const leaves = new THREE.Mesh(
+          new THREE.ConeGeometry(rnd(1.8, 2.6), rnd(4, 6.5), 7),
+          i % 2 ? matLeaves1 : matLeaves2
+        );
+        leaves.position.y = 4.5;
+        leaves.castShadow = true;
+        tree.add(leaves);
+
+        API.scene.add(tree);
+      }
+    }
+
+    // ---- Colinas (esferas achatadas) ----
+    for (let i = 0; i < 12; i++) {
+      const ang = (i / 12) * Math.PI * 2;
+      const rad = 200 + rnd(-20, 20);
+      const x = Math.cos(ang) * rad;
+      const z = Math.sin(ang) * rad;
+      const hill = new THREE.Mesh(
+        new THREE.SphereGeometry(rnd(14, 24), 12, 8),
+        matHill
+      );
+      hill.scale.y = 0.25;
+      hill.position.set(x, -1, z);
+      hill.receiveShadow = true;
+      API.scene.add(hill);
+    }
+  }
+
+  // ======================== ZONA INDUSTRIAL ========================
+  function addIndustrialZone() {
+    const matBrick  = new THREE.MeshLambertMaterial({ color: 0x8a5a4a });
+    const matConcrete = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
+    const matRoof   = new THREE.MeshLambertMaterial({ color: 0x4a4a4a });
+    const matStack  = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
+
+    // 2 fábricas en cada esquina NO/SO
+    for (const base of [[-150, -30], [150, -30], [-150, 30], [150, 30]]) {
+      const bx = base[0], bz = base[1];
+
+      // Nave principal
+      const nave = new THREE.Mesh(new THREE.BoxGeometry(22, 8, 14), matBrick);
+      nave.position.set(bx, 4, bz);
+      nave.castShadow = true;
+      nave.receiveShadow = true;
+      API.scene.add(nave);
+
+      // Techo plano
+      const techo = new THREE.Mesh(new THREE.BoxGeometry(23, 0.6, 15), matRoof);
+      techo.position.set(bx, 8.3, bz);
+      API.scene.add(techo);
+
+      // Chimenea principal
+      const chim = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.0, 20, 10), matStack);
+      chim.position.set(bx + 8, 10, bz - 4);
+      chim.castShadow = true;
+      API.scene.add(chim);
+
+      // Aro rojo en la chimenea
+      const aro = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 1, 10),
+        new THREE.MeshLambertMaterial({ color: 0xaa2222 }));
+      aro.position.set(bx + 8, 18, bz - 4);
+      API.scene.add(aro);
+
+      // Humo (objeto animado)
+      const smoke = new THREE.Mesh(
+        new THREE.SphereGeometry(1.8, 8, 6),
+        new THREE.MeshLambertMaterial({ color: 0xcccccc, transparent: true, opacity: 0.55 })
+      );
+      smoke.position.set(bx + 8, 21, bz - 4);
+      API.scene.add(smoke);
+      mod.smokes.push({ mesh: smoke, baseY: 21, t: Math.random() * 6 });
+
+      // Chimenea secundaria
+      const chim2 = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.5, 14, 8), matStack);
+      chim2.position.set(bx - 7, 7, bz + 3);
+      chim2.castShadow = true;
+      API.scene.add(chim2);
+
+      // Almacén exterior
+      const almacen = new THREE.Mesh(new THREE.BoxGeometry(8, 4, 8), matConcrete);
+      almacen.position.set(bx - 12, 2, bz - 6);
+      API.scene.add(almacen);
+
+      // Vallas perimetrales (líneas de postes)
+      for (let i = 0; i < 10; i++) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.5, 0.2), matConcrete);
+        post.position.set(bx - 12 + i * 2.4, 0.75, bz + 9);
+        API.scene.add(post);
+      }
+    }
+  }
+
+  // ======================== POSTES DE LUZ EN CARRETERAS ========================
+  function addStreetLights() {
+    // A lo largo de la carretera vertical principal (x≈0) y horizontal (z≈0)
+    const matPost = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const matLamp = new THREE.MeshBasicMaterial({ color: 0xfff2b0 });
+
+    for (let i = -8; i <= 8; i++) {
+      for (const sx of [-8, 8]) {
+        // Postes verticales
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 6, 6), matPost);
+        post.position.set(sx, 3, i * 22);
+        API.scene.add(post);
+
+        // Brazo superior
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.12), matPost);
+        arm.position.set(sx + (sx > 0 ? -0.7 : 0.7), 5.9, i * 22);
+        API.scene.add(arm);
+
+        // Foco
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.35, 6, 6), matLamp);
+        lamp.position.set(sx + (sx > 0 ? -1.3 : 1.3), 5.85, i * 22);
+        API.scene.add(lamp);
+      }
+    }
+    // A lo largo de la carretera horizontal (x=-37.5)
+    for (let i = -8; i <= 8; i++) {
+      for (const sz of [-8, 8]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 6, 6), matPost);
+        post.position.set(-37.5 + i * 22, 3, sz);
+        API.scene.add(post);
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1.4), matPost);
+        arm.position.set(-37.5 + i * 22, 5.9, sz + (sz > 0 ? -0.7 : 0.7));
+        API.scene.add(arm);
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.35, 6, 6), matLamp);
+        lamp.position.set(-37.5 + i * 22, 5.85, sz + (sz > 0 ? -1.3 : 1.3));
+        API.scene.add(lamp);
+      }
+    }
   }
 
   // ======================== CUARTEL HQ ========================
@@ -140,16 +371,12 @@
       return o;
     };
 
-    // Plataforma de hormigón
     add(26, 0.5, 26, matConc, 0, 0.25, 0);
-
-    // Murallas
     add(26, 3.5, 0.9, mat, 0, 2.0, -12.5);
     add(26, 3.5, 0.9, mat, 0, 2.0,  12.5);
     add(0.9, 3.5, 26, mat, -12.5, 2.0, 0);
     add(0.9, 3.5, 26, mat,  12.5, 2.0, 0);
 
-    // Torretas de esquina
     for (const [cx, cz] of [[-12, -12], [12, -12], [-12, 12], [12, 12]]) {
       add(3.2, 6, 3.2, matDark, cx, 3, cz);
       const canon = new THREE.Mesh(
@@ -161,7 +388,6 @@
       g.add(canon);
     }
 
-    // Búnker central
     add(9, 9, 9, matConc, 0, 4.5, 0);
     add(9.6, 0.6, 9.6, mat, 0, 9.3, 0);
     for (let i = 0; i < 4; i++) {
@@ -169,7 +395,6 @@
       add(0.5, 9.5, 0.5, matDark, Math.cos(a) * 4.4, 4.75, Math.sin(a) * 4.4);
     }
 
-    // Mástil y radar
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 7, 8), matDark);
     mast.position.set(0, 13, 0);
     g.add(mast);
@@ -182,7 +407,6 @@
     radarGroup.add(radar);
     g.add(radarGroup);
 
-    // Bandera
     const bandera = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.4),
       new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
     bandera.position.set(0, 13.5, 0.5);
@@ -199,17 +423,22 @@
     return hq;
   }
 
-  // ======================== AEROPUERTO ========================
+  // ======================== AEROPUERTO MILITAR v2 ========================
   function buildAirport(team, x, z, rotY) {
     const color = team === 'ally' ? 0x0055ff : 0xff2222;
-    const matAccent = new THREE.MeshLambertMaterial({ color });
-    const matAsphalt = new THREE.MeshLambertMaterial({ color: 0x252525 });
-    const matConc    = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
-    const matMetal   = new THREE.MeshLambertMaterial({ color: 0x555555 });
-    const matGlass   = new THREE.MeshLambertMaterial({ color: 0x2a5a7a, emissive: 0x0a2030 });
+    const matAccent   = new THREE.MeshLambertMaterial({ color });
+    const matAsphalt  = new THREE.MeshLambertMaterial({ color: 0x252525 });
+    const matConcrete = new THREE.MeshLambertMaterial({ color: 0x9a9a90 });
+    const matMetal    = new THREE.MeshLambertMaterial({ color: 0x555555 });
+    const matMetalDk  = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+    const matGlass    = new THREE.MeshLambertMaterial({ color: 0x2a5a7a, emissive: 0x0a2030 });
+    const matWhite    = new THREE.MeshBasicMaterial({ color: 0xdddddd });
+    const matYellow   = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
+    const matRed      = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+    const matGreen    = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
 
     const g = new THREE.Group();
-    g.position.set(x, 0.02, z);
+    g.position.set(x, 0.03, z);
     g.rotation.y = rotY;
     API.scene.add(g);
 
@@ -221,95 +450,274 @@
       return o;
     };
 
-    // -------- PISTA --------
-    const runway = new THREE.Mesh(new THREE.PlaneGeometry(16, 100), matAsphalt);
+    // -------- PISTA PRINCIPAL (más grande y con más detalles) --------
+    const runway = new THREE.Mesh(new THREE.PlaneGeometry(20, 130), matAsphalt);
     runway.rotation.x = -Math.PI / 2;
     runway.position.set(0, 0.02, 0);
     runway.receiveShadow = true;
     g.add(runway);
 
-    // Marcas centrales
-    for (let i = -7; i <= 7; i++) {
-      const marca = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 3.5),
-        new THREE.MeshBasicMaterial({ color: 0xdddddd }));
+    // Marcas centrales dashed
+    for (let i = -10; i <= 10; i++) {
+      const marca = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 4.5), matWhite);
       marca.rotation.x = -Math.PI / 2;
-      marca.position.set(0, 0.04, i * 6.5);
+      marca.position.set(0, 0.04, i * 6);
       g.add(marca);
     }
-    // Umbrales
-    for (const zEnd of [-47, 47]) {
-      for (let i = -3; i <= 3; i++) {
-        const u = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 3.5),
-          new THREE.MeshBasicMaterial({ color: 0xdddddd }));
+    // Umbrales (barras blancas al inicio y fin)
+    for (const zEnd of [-60, 60]) {
+      for (let i = -4; i <= 4; i++) {
+        const u = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 5), matWhite);
         u.rotation.x = -Math.PI / 2;
         u.position.set(i * 2.4, 0.04, zEnd);
         g.add(u);
       }
     }
-    // Luces
-    for (let i = -8; i <= 8; i++) {
-      for (const xx of [-8.5, 8.5]) {
-        const luz = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6),
-          new THREE.MeshBasicMaterial({ color: i % 2 ? 0xffaa00 : 0x00ff88 }));
-        luz.position.set(xx, 0.16, i * 6);
+    // Números de pista "18" y "36"
+    for (const [zc, num] of [[-55, '18'], [55, '36']]) {
+      // Números grandes al inicio
+      const canvas = document.createElement('canvas');
+      canvas.width = 128; canvas.height = 128;
+      const cx = canvas.getContext('2d');
+      cx.fillStyle = '#0000'; cx.fillRect(0, 0, 128, 128);
+      cx.fillStyle = '#ffffff';
+      cx.font = 'bold 90px sans-serif';
+      cx.textAlign = 'center';
+      cx.textBaseline = 'middle';
+      cx.fillText(num, 64, 64);
+      const tex = new THREE.CanvasTexture(canvas);
+      const numMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(5, 5),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true })
+      );
+      numMesh.rotation.x = -Math.PI / 2;
+      numMesh.position.set(0, 0.05, zc);
+      g.add(numMesh);
+    }
+
+    // Luces de pista (bordes)
+    for (let i = -10; i <= 10; i++) {
+      for (const xx of [-10.5, 10.5]) {
+        const luz = new THREE.Mesh(new THREE.SphereGeometry(0.25, 6, 6),
+          i % 2 ? matYellow : matGreen);
+        luz.position.set(xx, 0.18, i * 6);
+        g.add(luz);
+      }
+    }
+    // Luces de aproximación al inicio
+    for (let i = 1; i <= 5; i++) {
+      for (const xx of [-3, -1.5, 0, 1.5, 3]) {
+        const luz = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6), matWhite);
+        luz.position.set(xx, 0.18, -62 - i * 2);
         g.add(luz);
       }
     }
 
-    // -------- HANGARES --------
-    for (const hx of [-24, 24]) {
+    // -------- TAXIWAYS (calles de rodaje) --------
+    // Paralelo a la pista, a la derecha
+    const taxi1 = new THREE.Mesh(new THREE.PlaneGeometry(6, 120), matAsphalt);
+    taxi1.rotation.x = -Math.PI / 2;
+    taxi1.position.set(18, 0.025, 0);
+    g.add(taxi1);
+    // Conexiones (rampas)
+    for (const tz of [-40, -15, 15, 40]) {
+      const ramp = new THREE.Mesh(new THREE.PlaneGeometry(8, 4), matAsphalt);
+      ramp.rotation.x = -Math.PI / 2;
+      ramp.position.set(12, 0.025, tz);
+      g.add(ramp);
+      // Marcas amarillas en rampa
+      const yl = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 4), matYellow);
+      yl.rotation.x = -Math.PI / 2;
+      yl.position.set(12, 0.05, tz);
+      g.add(yl);
+    }
+    // Marcas amarillas taxiway
+    const yl1 = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 118), matYellow);
+    yl1.rotation.x = -Math.PI / 2;
+    yl1.position.set(18, 0.05, 0);
+    g.add(yl1);
+
+    // -------- HANGARES MILITARES --------
+    for (const hx of [-38, 38]) {
       const hz = 6;
-      add(16, 0.5, 16, matConc, hx, 0.25, hz);
-      add(16, 5.5, 0.6, matMetal, hx, 3, hz - 8);
-      add(16, 5.5, 0.6, matMetal, hx, 3, hz + 8);
-      add(0.6, 5.5, 16, matMetal, hx - 8, 3, hz);
-      add(15, 4.6, 0.5, matAccent, hx, 2.6, hz + 8.1);
-      // Techo inclinado
-      const t1 = new THREE.Mesh(new THREE.BoxGeometry(16, 0.5, 9), matMetal);
-      t1.position.set(hx, 6.2, hz - 4);
-      t1.rotation.x = -0.35;
-      g.add(t1);
-      const t2 = new THREE.Mesh(new THREE.BoxGeometry(16, 0.5, 9), matMetal);
-      t2.position.set(hx, 6.2, hz + 4);
-      t2.rotation.x = 0.35;
-      g.add(t2);
+      // Plataforma
+      add(22, 0.5, 22, matConcrete, hx, 0.25, hz);
+      // Paredes
+      add(22, 7, 0.8, matMetal, hx, 3.75, hz - 11);
+      add(22, 7, 0.8, matMetal, hx, 3.75, hz + 11);
+      add(0.8, 7, 22, matMetal, hx - 11, 3.75, hz);
+      // Puerta lateral con rayas team
+      add(21, 5.8, 0.5, matAccent, hx, 3, hz + 11.1);
+
+      // Techo abovedado (3 capas)
+      for (let i = 0; i < 3; i++) {
+        const roof = new THREE.Mesh(
+          new THREE.BoxGeometry(22 - i * 4, 0.4, 22),
+          matMetal
+        );
+        roof.position.set(hx, 7.5 + i * 0.9, hz);
+        g.add(roof);
+      }
+
+      // Número de hangar
+      add(2, 2, 0.2, matYellow, hx - 8, 5.5, hz + 11.2);
     }
 
-    // -------- TORRE DE CONTROL --------
-    const tx = -32, tz = -16;
-    add(7, 15, 7, matConc, tx, 7.5, tz);
-    add(9, 3.5, 9, matGlass, tx, 17, tz);
-    add(9.5, 0.5, 9.5, matMetal, tx, 19, tz);
-    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5, 6), matMetal);
-    ant.position.set(tx, 21.8, tz);
-    g.add(ant);
+    // -------- TERMINAL DE PASAJEROS / COMANDO --------
+    const tx = 0, tz2 = -75;
+    // Edificio principal
+    add(30, 8, 14, matConcrete, tx, 4, tz2);
+    // Cristalera frontal
+    add(28, 5, 0.3, matGlass, tx, 4.5, tz2 + 7.1);
+    // Piso superior
+    add(28, 0.6, 12, matMetal, tx, 8.2, tz2);
+    // Barandilla del techo
+    for (let i = 0; i < 15; i++) {
+      add(0.2, 1.2, 0.2, matMetal, tx - 14 + i * 2, 9.1, tz2 + 6);
+    }
+    // Pasarelas de embarque (3 fingers)
+    for (const px of [-10, 0, 10]) {
+      add(3, 0.5, 8, matConcrete, tx + px, 5, tz2 + 12);
+      // Techo de pasarela
+      add(3, 0.3, 8, matMetal, tx + px, 7.5, tz2 + 12);
+      // Cristalera
+      add(3, 2.2, 0.15, matGlass, tx + px, 6, tz2 + 16);
+      // Soportes
+      add(0.3, 5, 0.3, matMetal, tx + px - 1.3, 2.5, tz2 + 8.2);
+      add(0.3, 5, 0.3, matMetal, tx + px + 1.3, 2.5, tz2 + 8.2);
+      add(0.3, 5, 0.3, matMetal, tx + px - 1.3, 2.5, tz2 + 15.8);
+      add(0.3, 5, 0.3, matMetal, tx + px + 1.3, 2.5, tz2 + 15.8);
+    }
 
+    // -------- TORRE DE CONTROL (más alta) --------
+    const tx2 = -55, tz3 = -55;
+    add(8, 22, 8, matConcrete, tx2, 11, tz3);
+    // Sección de cristal
+    add(11, 5, 11, matGlass, tx2, 24, tz3);
+    // Techo
+    add(12, 0.8, 12, matMetal, tx2, 27, tz3);
+    // Antena
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 8, 6), matMetal);
+    ant.position.set(tx2, 31.4, tz3);
+    g.add(ant);
+    // Radar giratorio
     const radarPivot = new THREE.Group();
-    radarPivot.position.set(tx, 23.5, tz);
-    const radar = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.15, 0.8), matMetal);
+    radarPivot.position.set(tx2, 33, tz3);
+    const radar = new THREE.Mesh(new THREE.BoxGeometry(4, 0.2, 1.2), matMetal);
     radarPivot.add(radar);
     g.add(radarPivot);
+    // Luces de balizaje (rojas)
+    for (const [dx, dz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
+      const luz = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 6), matRed);
+      luz.position.set(tx2 + dx, 28, tz3 + dz);
+      g.add(luz);
+    }
 
     // -------- DEPÓSITOS DE COMBUSTIBLE --------
-    for (let i = 0; i < 3; i++) {
-      const tank = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 4.5, 16), matMetal);
-      tank.position.set(-28 + i * 6.5, 2.25, 20);
+    for (let i = 0; i < 4; i++) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 6, 18), matMetal);
+      tank.position.set(-45 + i * 8, 3, 30);
       tank.castShadow = true;
       g.add(tank);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(2.7, 2.7, 0.35, 16), matAccent);
-      cap.position.set(-28 + i * 6.5, 4.65, 20);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(3.1, 3.1, 0.5, 18), matAccent);
+      cap.position.set(-45 + i * 8, 6.2, 30);
       g.add(cap);
+      // Banda roja de peligro
+      const banda = new THREE.Mesh(new THREE.CylinderGeometry(3.05, 3.05, 0.4, 18), matRed);
+      banda.position.set(-45 + i * 8, 4, 30);
+      g.add(banda);
     }
+
+    // -------- HELIPUERTO --------
+    const helipadX = 45, helipadZ = 30;
+    // Plataforma circular
+    const helipad = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.4, 24), matConcrete);
+    helipad.position.set(helipadX, 0.2, helipadZ);
+    helipad.receiveShadow = true;
+    g.add(helipad);
+    // Círculo blanco
+    const helipadCircle = new THREE.Mesh(
+      new THREE.RingGeometry(6, 6.5, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    );
+    helipadCircle.rotation.x = -Math.PI / 2;
+    helipadCircle.position.set(helipadX, 0.42, helipadZ);
+    g.add(helipadCircle);
+    // Letra H
+    const hCanvas = document.createElement('canvas');
+    hCanvas.width = 128; hCanvas.height = 128;
+    const hx2 = hCanvas.getContext('2d');
+    hx2.fillStyle = '#ffffff';
+    hx2.font = 'bold 110px sans-serif';
+    hx2.textAlign = 'center';
+    hx2.textBaseline = 'middle';
+    hx2.fillText('H', 64, 64);
+    const hTex = new THREE.CanvasTexture(hCanvas);
+    const hMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(5, 5),
+      new THREE.MeshBasicMaterial({ map: hTex, transparent: true })
+    );
+    hMesh.rotation.x = -Math.PI / 2;
+    hMesh.position.set(helipadX, 0.43, helipadZ);
+    g.add(hMesh);
+
+    // Luces perimetrales del helipuerto
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      const luz = new THREE.Mesh(new THREE.SphereGeometry(0.25, 6, 6), matGreen);
+      luz.position.set(helipadX + Math.cos(a) * 7.5, 0.5, helipadZ + Math.sin(a) * 7.5);
+      g.add(luz);
+    }
+
+    // -------- AVIONES APARCADOS --------
+    // Pequeños aviones estáticos en el apron frente a la terminal
+    for (const px of [-6, 6]) {
+      const parked = new THREE.Group();
+      // Fuselaje
+      const fuse = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.6, 6, 10), matMetal);
+      fuse.rotation.x = Math.PI / 2;
+      parked.add(fuse);
+      // Ala
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(8, 0.2, 2), matMetal);
+      parked.add(wing);
+      // Cola
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2, 1.5), matMetal);
+      tail.position.set(0, 1, -3);
+      parked.add(tail);
+      // Cabina
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(1, 0.6, 1.5), matGlass);
+      cab.position.set(0, 0.5, 1.5);
+      parked.add(cab);
+      parked.position.set(px, 1.2, tz2 + 24);
+      parked.rotation.y = Math.PI;
+      g.add(parked);
+    }
+
+    // -------- TORRE DE AGUA --------
+    const wtx = 60, wtz = -30;
+    // Patas
+    for (const [ox, oz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) {
+      add(0.4, 12, 0.4, matMetal, wtx + ox, 6, wtz + oz);
+    }
+    // Tanque
+    const wt = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.5, 4, 14), matConcrete);
+    wt.position.set(wtx, 13, wtz);
+    g.add(wt);
+    // Techo de agua
+    const wtop = new THREE.Mesh(new THREE.ConeGeometry(3.8, 1.2, 14), matMetal);
+    wtop.position.set(wtx, 15.6, wtz);
+    g.add(wtop);
 
     return { team, mesh: g, x, z, rotY, radarPivot };
   }
 
-  // ======================== CAZA (Fighter) ========================
+  // ======================== CAZA ========================
   function buildFighter(color, team, x, z) {
     const matBody   = new THREE.MeshLambertMaterial({ color });
     const matDark   = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
     const matGlass  = new THREE.MeshLambertMaterial({ color: 0x0e1a2a });
     const matMetal  = new THREE.MeshLambertMaterial({ color: 0x666666 });
+    const matRedTip = new THREE.MeshBasicMaterial({ color: 0xcc2222 });
 
     const g = new THREE.Group();
     const add = (geo, mat, x, y, z, rx, ry, rz) => {
@@ -323,46 +731,37 @@
       return m;
     };
 
-    // Fuselaje (nose at +Z)
     add(new THREE.BoxGeometry(1.7, 1.4, 9), matBody, 0, 0, 0);
     add(new THREE.BoxGeometry(1.3, 1.0, 3.5), matBody, 0, 0.1, -5.5);
 
-    // Nariz
     const nose = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.2, 10), matBody);
-    nose.rotation.x = Math.PI / 2;   // apuntando a +Z
+    nose.rotation.x = Math.PI / 2;
     nose.position.set(0, 0, 5.5);
     nose.castShadow = true;
     g.add(nose);
 
-    // Punta roja
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.8, 10),
-      new THREE.MeshBasicMaterial({ color: 0xcc2222 }));
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.8, 10), matRedTip);
     tip.rotation.x = Math.PI / 2;
     tip.position.set(0, 0, 7.2);
     g.add(tip);
 
-    // Cabina
     add(new THREE.BoxGeometry(0.95, 0.75, 2.8), matGlass, 0, 0.9, -0.8);
     add(new THREE.BoxGeometry(0.95, 0.45, 1.5), matGlass, 0, 0.98, 1.4);
 
-    // Alas con flecha
     const wl = add(new THREE.BoxGeometry(4.2, 0.32, 2.8), matBody, -2.6, 0, 0.6);
     wl.rotation.z = 0.14;
     const wr = add(new THREE.BoxGeometry(4.2, 0.32, 2.8), matBody,  2.6, 0, 0.6);
     wr.rotation.z = -0.14;
 
-    // Puntas de ala
     add(new THREE.BoxGeometry(0.85, 0.45, 1.4), matDark, -4.6, 0.2, 1.0);
     add(new THREE.BoxGeometry(0.85, 0.45, 1.4), matDark,  4.6, 0.2, 1.0);
 
-    // Misiles aire-aire bajo las alas
     for (const wx of [-3.0, 3.0]) {
       for (const wz of [0.2, 1.4]) {
         const msl = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 2.8, 8), matMetal);
         msl.rotation.x = Math.PI / 2;
         msl.position.set(wx, -0.45, wz);
         g.add(msl);
-        // Punta
         const t = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 8), matDark);
         t.rotation.x = Math.PI / 2;
         t.position.set(wx, -0.45, wz + 1.65);
@@ -370,14 +769,11 @@
       }
     }
 
-    // Timón vertical
     const tailV = add(new THREE.BoxGeometry(0.32, 2.6, 2), matBody, 0, 1.5, -4.5);
     tailV.rotation.x = -0.25;
 
-    // Estabilizador horizontal
     add(new THREE.BoxGeometry(3.8, 0.28, 1.3), matBody, 0, 0, -4.8);
 
-    // Motores gemelos
     for (const ex of [-0.7, 0.7]) {
       const eng = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 2, 12), matDark);
       eng.rotation.x = Math.PI / 2;
@@ -385,7 +781,6 @@
       g.add(eng);
     }
 
-    // Postquemadores
     const flames = [];
     for (const ex of [-0.7, 0.7]) {
       const f = new THREE.Mesh(
@@ -420,7 +815,7 @@
     return unit;
   }
 
-  // ======================== HELICÓPTERO DE ATAQUE ========================
+  // ======================== HELICÓPTERO ========================
   function buildAttackHeli(color, team, x, z) {
     const matBody   = new THREE.MeshLambertMaterial({ color });
     const matDark   = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
@@ -440,39 +835,30 @@
       return m;
     };
 
-    // Fuselaje
     add(new THREE.BoxGeometry(2.6, 2.1, 6), matBody, 0, 0, 0);
-    // Nariz
     const nose = new THREE.Mesh(new THREE.ConeGeometry(1.3, 2.2, 12), matBody);
     nose.rotation.x = Math.PI / 2;
     nose.position.set(0, 0, 4);
     nose.castShadow = true;
     g.add(nose);
 
-    // Cabina de cristal
     add(new THREE.BoxGeometry(2.0, 1.5, 1.7), matGlass, 0, 0.35, 1.8);
-
-    // Cola
     add(new THREE.BoxGeometry(0.7, 0.7, 5), matBody, 0, 0.3, -5.5);
-    // Estabilizador de cola
     add(new THREE.BoxGeometry(3.2, 0.16, 1.1), matBody, 0, 0.3, -7.2);
 
-    // Rotor de cola
     const rotorTail = new THREE.Group();
     rotorTail.position.set(0.45, 0.3, -8);
-    const tailBlade1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), matRotor);
-    const tailBlade2 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.1, 2.4), matRotor);
-    rotorTail.add(tailBlade1); rotorTail.add(tailBlade2);
+    const tb1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), matRotor);
+    const tb2 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.1, 2.4), matRotor);
+    rotorTail.add(tb1); rotorTail.add(tb2);
     g.add(rotorTail);
 
-    // Patines
     for (const sx of [-1.05, 1.05]) {
       add(new THREE.BoxGeometry(0.16, 0.16, 4.5), matMetal, sx, -1.5, 0.5);
       add(new THREE.BoxGeometry(0.16, 1.3, 0.16), matMetal, sx, -0.75, -1.4);
       add(new THREE.BoxGeometry(0.16, 1.3, 0.16), matMetal, sx, -0.75, 2.2);
     }
 
-    // Rotor principal (4 aspas)
     const rotorMain = new THREE.Group();
     rotorMain.position.set(0, 1.5, 0);
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.9, 8), matDark);
@@ -488,25 +874,15 @@
     }
     g.add(rotorMain);
 
-    // Alas con armas
     add(new THREE.BoxGeometry(6, 0.22, 0.9), matBody, 0, -0.2, 0.6);
 
-    // Pods de cohetes
     for (const wx of [-2.4, -1.6, 1.6, 2.4]) {
       const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 1.7, 8), matDark);
       pod.rotation.x = Math.PI / 2;
       pod.position.set(wx, -0.65, 0.9);
       g.add(pod);
-      for (let r = 0; r < 4; r++) {
-        const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.12, 6),
-          new THREE.MeshBasicMaterial({ color: 0x000000 }));
-        tube.rotation.x = Math.PI / 2;
-        tube.position.set(wx - 0.15 + (r % 2) * 0.3, -0.65 + (r < 2 ? 0.15 : -0.15), 1.78);
-        g.add(tube);
-      }
     }
 
-    // Cañón bajo la nariz (torreta)
     const turret = new THREE.Group();
     const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 1.4, 8), matDark);
     cannon.rotation.x = Math.PI / 2;
@@ -515,12 +891,9 @@
     turret.position.set(0, -1.0, 2.6);
     g.add(turret);
 
-    // Motores
     for (const ex of [-0.8, 0.8]) {
       add(new THREE.CylinderGeometry(0.42, 0.42, 1.2, 8), matDark, ex, 0.7, -2.8);
     }
-
-    // Sensor / cámara
     add(new THREE.BoxGeometry(0.5, 0.5, 0.7), matDark, 0, 1.0, 3.2);
 
     API.scene.add(g);
@@ -546,20 +919,23 @@
 
   // ======================== CREAR EL MUNDO ========================
   addDistantMountains();
-  const allyHQ  = buildHQ('ally',  0, -100);
-  const enemyHQ = buildHQ('enemy', 0,  100);
-  const allyAirport  = buildAirport('ally',  -78, -52, 0);
-  const enemyAirport = buildAirport('enemy',  78,  52, Math.PI);
+  addRiver();
+  addForestAndHills();
+  addIndustrialZone();
+  addStreetLights();
 
-  // Cazas
+  const allyHQ  = buildHQ('ally',  0, -140);
+  const enemyHQ = buildHQ('enemy', 0,  140);
+  const allyAirport  = buildAirport('ally',  -100, -90, 0);
+  const enemyAirport = buildAirport('enemy',  100,  90, Math.PI);
+
   for (let i = 0; i < 3; i++) {
-    buildFighter(0x0055ff, 'ally',  -78 + (i - 1) * 6, -70);
-    buildFighter(0xff2222, 'enemy',  78 + (i - 1) * 6,  70);
+    buildFighter(0x0055ff, 'ally',  -100 + (i - 1) * 8, -100);
+    buildFighter(0xff2222, 'enemy',  100 + (i - 1) * 8,  100);
   }
-  // Helicópteros de ataque
   for (let i = 0; i < 2; i++) {
-    buildAttackHeli(0x0055ff, 'ally',  -55 + i * 12, -80);
-    buildAttackHeli(0xff2222, 'enemy',  55 - i * 12,  80);
+    buildAttackHeli(0x0055ff, 'ally',  -70 + i * 14, -105);
+    buildAttackHeli(0xff2222, 'enemy',  70 - i * 14,  105);
   }
 
   // ======================== ACTUALIZACIÓN ========================
@@ -582,7 +958,6 @@
     p.cooldown -= dt;
     p.missileCooldown -= dt;
 
-    // Buscar objetivos (aviones/helicópteros enemigos)
     let target = null, tDist = 1e9;
     for (const cand of mod.planes.concat(mod.helis)) {
       if (cand.team === p.team || cand.isDead) continue;
@@ -590,7 +965,6 @@
       if (d < tDist) { tDist = d; target = cand; }
     }
 
-    // Buscar objetivo terrestre si no hay aéreo
     let groundTarget = null, gDist = 1e9;
     if (!target) {
       for (const s of API.soldiers) {
@@ -600,7 +974,6 @@
       }
     }
 
-    // Movimiento
     const altBase = 32;
     if (target && tDist < 180) {
       p.patrolAngle += dt * 0.5;
@@ -610,7 +983,7 @@
       _d.z += Math.sin(p.patrolAngle * 3) * 25;
     } else {
       p.patrolAngle += dt * 0.15;
-      const cx = 0, cz = p.team === 'ally' ? -30 : 30;
+      const cx = 0, cz = p.team === 'ally' ? -50 : 50;
       _d.set(
         cx + Math.cos(p.patrolAngle) * p.patrolRadius,
         altBase,
@@ -635,38 +1008,28 @@
       p.mesh.rotation.z = p.roll;
     }
 
-    // Disparar cañón
     if (target && p.cooldown <= 0 && tDist < 160) {
-      const muzzle = p.mesh.position.clone();
-      API.fireProjectile(muzzle, target.mesh.position.clone(), 0xffff44, 22, p.team);
+      API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xffff44, 22, p.team);
       API.playSound('shot');
       p.cooldown = 0.12;
     } else if (groundTarget && p.cooldown <= 0 && gDist < 60) {
-      const muzzle = p.mesh.position.clone();
-      API.fireProjectile(muzzle, groundTarget.mesh.position.clone(), 0xffff44, 15, p.team);
+      API.fireProjectile(p.mesh.position.clone(), groundTarget.mesh.position.clone(), 0xffff44, 15, p.team);
       API.playSound('shot');
       p.cooldown = 0.25;
     }
 
-    // Misiles
     if (target && p.missileCooldown <= 0 && tDist < 130 && tDist > 25) {
-      const muzzle = p.mesh.position.clone();
-      API.fireProjectile(muzzle, target.mesh.position.clone(), 0xff6600, 60, p.team);
+      API.fireProjectile(p.mesh.position.clone(), target.mesh.position.clone(), 0xff6600, 60, p.team);
       API.playSound('explosion');
       p.missileCooldown = 3.5;
     }
 
-    // Animación de llamas
     for (const f of p.flames) f.scale.setScalar(0.7 + Math.random() * 0.6);
 
-    // Destrucción
     if (p.hp <= 0) {
       p.isDead = true;
       p.respawnTimer = 0;
       API.playSound('explosion');
-      // Explosión visual
-      API.scene.remove(p.mesh);
-      API.scene.add(p.mesh);
     }
   }
 
@@ -689,7 +1052,6 @@
     h.cooldown -= dt;
     h.missileCooldown -= dt;
 
-    // Buscar objetivo (aéreo)
     let target = null, tDist = 1e9;
     for (const cand of mod.planes.concat(mod.helis)) {
       if (cand.team === h.team || cand.isDead) continue;
@@ -697,7 +1059,6 @@
       if (d < tDist) { tDist = d; target = cand; }
     }
 
-    // Objetivos terrestres
     let gTarget = null, gDist = 1e9;
     if (!target || tDist > 90) {
       for (const s of API.soldiers) {
@@ -727,7 +1088,7 @@
       _d.z += Math.sin(h.strafeTimer * 1.2) * 28;
     } else {
       h.patrolAngle += dt * 0.3;
-      const cz = h.team === 'ally' ? -20 : 20;
+      const cz = h.team === 'ally' ? -30 : 30;
       _d.set(
         Math.cos(h.patrolAngle) * 60,
         altBase + Math.sin(h.patrolAngle * 2) * 5,
@@ -749,20 +1110,16 @@
       h.mesh.rotation.z = -diff * 0.6;
     }
 
-    // Apuntar torreta al objetivo
-    if (h.turret && target) {
-      const dx = target.mesh.position.x - h.mesh.position.x;
-      const dz = target.mesh.position.z - h.mesh.position.z;
-      const relYaw = Math.atan2(dx, dz) - h.yaw;
-      h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
-    } else if (h.turret && gTarget) {
-      const dx = gTarget.mesh.position.x - h.mesh.position.x;
-      const dz = gTarget.mesh.position.z - h.mesh.position.z;
-      const relYaw = Math.atan2(dx, dz) - h.yaw;
-      h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
+    if (h.turret) {
+      const tgt = target ? target.mesh.position : (gTarget ? gTarget.mesh.position : null);
+      if (tgt) {
+        const dx = tgt.x - h.mesh.position.x;
+        const dz = tgt.z - h.mesh.position.z;
+        const relYaw = Math.atan2(dx, dz) - h.yaw;
+        h.turret.rotation.y += (relYaw - h.turret.rotation.y) * Math.min(1, dt * 4);
+      }
     }
 
-    // Disparar cañón
     if (target && h.cooldown <= 0 && tDist < 90) {
       const muzzle = h.mesh.position.clone(); muzzle.y -= 0.5;
       API.fireProjectile(muzzle, target.mesh.position.clone(), 0xffff00, 12, h.team);
@@ -775,7 +1132,6 @@
       h.cooldown = 0.2;
     }
 
-    // Misiles
     if (target && h.missileCooldown <= 0 && tDist < 100 && tDist > 20) {
       API.fireProjectile(h.mesh.position.clone(), target.mesh.position.clone(), 0xff4400, 70, h.team);
       API.playSound('explosion');
@@ -789,7 +1145,6 @@
     }
   }
 
-  // Resolución de daño: proyectiles del juego vs. unidades del mod
   function resolveModDamage() {
     const all = [...mod.planes, ...mod.helis, ...mod.hqs];
     for (let i = API.projectiles.length - 1; i >= 0; i--) {
@@ -806,6 +1161,16 @@
           break;
         }
       }
+    }
+  }
+
+  function updateSmokes(dt) {
+    for (const s of mod.smokes) {
+      s.t += dt;
+      s.mesh.position.y = s.baseY + (s.t % 4) * 2.5;
+      s.mesh.scale.setScalar(1 + (s.t % 4) * 0.35);
+      s.mesh.material.opacity = 0.55 * (1 - (s.t % 4) / 4);
+      if (s.t % 4 > 3.9) s.t = 0;
     }
   }
 
@@ -845,17 +1210,18 @@
     for (const p of mod.planes) updatePlane(p, dt);
     for (const h of mod.helis) updateHeli(h, dt);
 
+    updateSmokes(dt);
     resolveModDamage();
     updateHQHUD();
     checkWinLose();
   };
 
   window.AirConquestMod = {
-    version: '1.0',
+    version: '2.0',
     hqs: mod.hqs,
     planes: mod.planes,
     helis: mod.helis,
   };
 
-  console.log(`✈️ Mod Aire y Conquista v1.0 listo — ${mod.planes.length} cazas, ${mod.helis.length} helicópteros, ${mod.hqs.length} cuarteles.`);
+  console.log(`✈️ Mod Aire y Conquista v2.0 listo — ${mod.planes.length} cazas, ${mod.helis.length} helicópteros, ${mod.hqs.length} cuarteles, mapa mejorado.`);
 })();
