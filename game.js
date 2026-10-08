@@ -353,7 +353,7 @@ function createEnvironment() {
 function isColliding(pos, radius) { if(pos.x+radius>SHORE) return true; for(let i=0;i<houses.length;i++){ const h=houses[i]; if(pos.x+radius>h.min.x && pos.x-radius<h.max.x && pos.z+radius>h.min.z && pos.z-radius<h.max.z) return true; } return false; }
 function bulletBlocked(p){ for(let i=0;i<bwalls.length;i++){ const w=bwalls[i]; if(p.x>w.x0&&p.x<w.x1&&p.z>w.z0&&p.z<w.z1) return true; } return false; }
 function losClear(a,b){ const dx=b.x-a.x,dz=b.z-a.z,n=Math.max(2,Math.floor(Math.hypot(dx,dz)/2.5)); for(let i=1;i<n;i++){ _lp.set(a.x+dx*i/n,0,a.z+dz*i/n); if(bulletBlocked(_lp)) return false; } return true; }
-function tryMove(u,np){ const p=u.mesh.position,r=u.radius||1; if(isColliding(p,r)){ p.copy(np); return; } if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
+function tryMove(u,np){ const p=u.mesh.position,r=u.radius||1; if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
 function releaseSlot(u){ if(u.slot){ if(u.slot.occ===u) u.slot.occ=null; u.slot=null; } }
 function exitPath(s){ return [new THREE.Vector3(s.hx,1,s.hz+2.5),new THREE.Vector3(s.hx,1,s.hz+8.5),new THREE.Vector3(s.hx+9.5,1,s.hz+9.5)]; }
 function enterPath(p,hx,hz){ const pts=[]; if(p.z<hz+9){ const sx=p.x>=hx?1:-1; if(Math.abs(p.x-hx)<9.5) pts.push(new THREE.Vector3(hx+sx*9.5,1,p.z)); pts.push(new THREE.Vector3(hx+sx*9.5,1,hz+9.5)); } pts.push(new THREE.Vector3(hx,1,hz+8.5),new THREE.Vector3(hx,1,hz+2.5)); return pts; }
@@ -836,8 +836,8 @@ function handleMapClick(e) {
 
 
 /* ============ RUTAS: A* sobre cuadrícula (rodea edificios, árboles y río) ============ */
-function findPath(sx, sz, tx, tz, r, maxExp) {
-  const cs = 1.5, M = 25;
+function findPath(sx, sz, tx, tz, r, maxExp, margen) {
+  const cs = 1.5, M = margen || 25;
   const minX = Math.max(-150, Math.min(sx, tx) - M), maxX = Math.min(150, Math.max(sx, tx) + M);
   const minZ = Math.max(-220, Math.min(sz, tz) - M), maxZ = Math.min(220, Math.max(sz, tz) + M);
   const nx = Math.ceil((maxX - minX) / cs) + 1, nz = Math.ceil((maxZ - minZ) / cs) + 1;
@@ -1135,7 +1135,7 @@ function updateAI(delta) {
         u.routeT = (u.routeT || 0) - delta;
         if (u.routeT <= 0) {
           u.routeT = 4 + Math.random() * 2;
-          const rt = findPath(up.x, up.z, u.target.x, u.target.z, u.radius || 1, 5000);
+          const rt = findPath(up.x, up.z, u.target.x, u.target.z, u.radius || 1, 16000, 70);
           if (rt.length) { u.route = rt; u.routeFor = { x: u.target.x, z: u.target.z }; }
         }
       }
