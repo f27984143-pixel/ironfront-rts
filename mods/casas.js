@@ -1,585 +1,541 @@
 /* ============================================================
-   MOD: Casas Destructibles v1.0
-   - 4 tipos de casas
-   - Ventanas VISIBLES (marco sólido + cristal)
-   - Sin hitbox fantasma (limpia colisiones base correctamente)
-   - Sonido al destruir
-   - 2 puertas + escaleras
-   - IA las usa como cobertura
-   - Destruibles con fases + fuego + humo
-   Requiere: mejora_mundo.js (para WorldData)
+   MOD: Casas Destructibles v2.0
+   - 6 tipos de edificio: casa baja, casa familiar, apartamentos,
+     tienda, almacén y oficinas con fachada de vidrio
+   - Las paredes son piezas: cada pieza se rompe por separado
+   - Ventanas que se rompen, puertas abiertas (la IA entra por ahí)
+   - Grietas al dañarse, polvo, escombros con gravedad y rebote
+   - Colapso por pisos: el piso de arriba cae sobre el de abajo
+   - Fuego y humo en las ruinas; blast() para explosiones
+   Requiere: IronfrontAPI (y mejora_mundo.js para WorldData, opcional)
    ============================================================ */
 (function () {
-  if (window.__CASAS_LOADED) { console.warn('⚠️ Casas ya cargadas'); return; }
+  if (window.__CASAS_LOADED) { console.warn('Casas ya cargadas'); return; }
   window.__CASAS_LOADED = true;
 
   const API = window.IronfrontAPI;
-  if (!API) { console.error('❌ IronfrontAPI no disponible'); return; }
+  if (!API) { console.error('IronfrontAPI no disponible'); return; }
   const THREE = window.THREE;
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const rnd = (a, b) => a + Math.random() * (b - a);
+  const FAR = 99999;
+  const GRAV = 16;
+  const CFG = {
+    cell: 3.0, fh: 4, wallHp: 260, glassHp: 70,
+    maxDebris: 160, maxFx: 110, maxBuildings: 26,
+    breakSoundGap: 0.12,
+  };
 
-  console.log('🏘️ Mod Casas Destructibles v1.0: iniciando...');
-  API.say('🏘️ Casas cargadas');
-
-  // Datos del mundo (si mejora_mundo.js cargó primero)
-  const WD = window.WorldData || {};
-  const RIVER = WD.RIVER || { zMin: 42, zMax: 68, centerZ: 55, halfLen: 125 };
-  const BRIDGES_X = WD.BRIDGES_X || [{xMin:-10,xMax:10},{xMin:-100,xMax:-80},{xMin:80,xMax:100}];
+  console.log('Mod Casas Destructibles v2.0: iniciando...');
 
   const buildings = [];
-  let shakeAmount = 0;
+  let T_NOW = 0, shakeAmount = 0, lastBreakSnd = -1;
 
-  // ===================== HELPERS =====================
-  const dustMat = new THREE.MeshBasicMaterial({ color: 0xbbaa88, transparent: true, opacity: 0.85, depthWrite: false });
-  function spawnDust(pos) {
-    for (let i = 0; i < 6; i++) {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(rnd(0.2, 0.5), 5, 4), dustMat.clone());
-      m.position.copy(pos);
-      m.position.x += rnd(-0.8, 0.8); m.position.y += rnd(0, 1); m.position.z += rnd(-0.8, 0.8);
-      API.scene.add(m);
-      setTimeout(() => API.scene.remove(m), 900);
-    }
+  // Lee un global del juego: window.X si existe, si no la variable global
+  function world(name) {
+    if (window[name] !== undefined) return window[name];
+    try { return (0, eval)(name); } catch (e) { return null; }
   }
-  function spawnFlyingDebris(pos, count) {
-    const mat = new THREE.MeshLambertMaterial({ color: 0x8a7a5a });
-    const mat2 = new THREE.MeshLambertMaterial({ color: 0x5a4a3a });
-    for (let i = 0; i < count; i++) {
-      const debris = new THREE.Mesh(
-        new THREE.BoxGeometry(rnd(0.3, 0.8), rnd(0.3, 0.6), rnd(0.3, 0.8)),
-        Math.random() < 0.5 ? mat : mat2
-      );
-      debris.position.copy(pos);
-      debris.position.x += rnd(-1, 1); debris.position.y += rnd(0, 1); debris.position.z += rnd(-1, 1);
-      debris.rotation.set(rnd(0, 3), rnd(0, 3), rnd(0, 3));
-      debris.castShadow = true;
-      API.scene.add(debris);
-      // Animación manual
-      const vel = V(rnd(-3, 3), rnd(3, 6), rnd(-3, 3));
-      const angVel = V(rnd(-4, 4), rnd(-4, 4), rnd(-4, 4));
-      let t = 0;
-      const iv = setInterval(() => {
-        t += 0.033;
-        vel.y -= 18 * 0.033;
-        debris.position.addScaledVector(vel, 0.033);
-        debris.rotation.x += angVel.x * 0.033;
-        debris.rotation.y += angVel.y * 0.033;
-        debris.rotation.z += angVel.z * 0.033;
-        if (debris.position.y < 0.2) {
-          debris.position.y = 0.2;
-          vel.y *= -0.35; vel.x *= 0.6; vel.z *= 0.6;
-          angVel.x *= 0.5; angVel.y *= 0.5; angVel.z *= 0.5;
-        }
-        if (t > 4) { API.scene.remove(debris); clearInterval(iv); }
-      }, 33);
-    }
+  const WD = window.WorldData || {};
+  const RIVER = WD.RIVER || { zMin: 42, zMax: 68 };
+
+  // ===================== TIPOS DE EDIFICIO =====================
+  const TYPES = [
+    { name: 'Casa baja',     W: 8,  D: 8,  floors: 1, wall: 0xd8d2c4, roof: 'pitch', chimney: true },
+    { name: 'Casa familiar', W: 9,  D: 9,  floors: 2, wall: 0xc8b8a0, roof: 'pitch', porch: true },
+    { name: 'Apartamentos',  W: 10, D: 9,  floors: 4, wall: 0xb8c0c8, roof: 'flat',  balc: true, ac: true },
+    { name: 'Tienda',        W: 12, D: 8,  floors: 1, wall: 0xd0c0a0, roof: 'flat',  shop: true },
+    { name: 'Almacen',       W: 12, D: 10, floors: 1, wall: 0x7d8a94, roof: 'flat',  warehouse: true, fh: 5.5 },
+    { name: 'Oficinas',      W: 10, D: 9,  floors: 3, wall: 0x9aa5b0, roof: 'flat',  glassy: true, ac: true },
+  ];
+
+  // ===================== MATERIALES Y GEOMETRÍA (compartidos) =====================
+  const matCache = {};
+  function M(hex) { return matCache[hex] || (matCache[hex] = new THREE.MeshLambertMaterial({ color: hex })); }
+  const MAT_GLASS = new THREE.MeshLambertMaterial({ color: 0x7fb6d9, transparent: true, opacity: 0.55, depthWrite: false, emissive: 0x0d2233 });
+  const MAT_DOOR = M(0x3a2a1a), MAT_CRACK = M(0x161616), MAT_ROOF = M(0x7a3a2a), MAT_SLAB = M(0x8a8478);
+  const MAT_METAL = M(0x4a5056), MAT_AWN_A = M(0xc8402c), MAT_AWN_B = M(0xf2efe6), MAT_SIGN = M(0x7a1f1f);
+  const MAT_AC = M(0x9aa0a6), MAT_RAIL = M(0x555555), MAT_COL = M(0xeeeae0);
+  const geoCache = {};
+  function G(w, h, d) {
+    const k = w.toFixed(2) + '_' + h.toFixed(2) + '_' + d.toFixed(2);
+    return geoCache[k] || (geoCache[k] = new THREE.BoxGeometry(w, h, d));
   }
-  function spawnSmokePlume(pos) {
-    for (let i = 0; i < 10; i++) {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(rnd(0.4, 0.9), 6, 5),
-        new THREE.MeshBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.7, depthWrite: false }));
-      m.position.copy(pos);
-      m.position.x += rnd(-1.5, 1.5); m.position.y += rnd(0, 2); m.position.z += rnd(-1.5, 1.5);
-      API.scene.add(m);
-      const vel = V(rnd(-0.8, 0.8), rnd(2, 5), rnd(-0.8, 0.8));
-      let t = 0;
-      const iv = setInterval(() => {
-        t += 0.033;
-        m.position.addScaledVector(vel, 0.033);
-        vel.y -= 3 * 0.033;
-        m.material.opacity = Math.max(0, 0.7 * (1 - t / 2.2));
-        m.scale.multiplyScalar(1 + 0.033 * 0.8);
-        if (t >= 2.2) { API.scene.remove(m); clearInterval(iv); }
-      }, 33);
-    }
-  }
-  function playDestroySound() {
-    API.playSound('explosion');
-    setTimeout(() => API.playSound('clash'), 150);
-    setTimeout(() => API.playSound('explosion'), 400);
+  // Pared según eje: 'x' = corre a lo largo de x, 'z' = a lo largo de z
+  function axisGeo(axis, along, h, thick) { return axis === 'x' ? G(along, h, thick) : G(thick, h, along); }
+  function box(parent, w, h, d, mat, x, y, z) {
+    const m = new THREE.Mesh(G(w, h, d), mat);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+    parent.add(m); return m;
   }
 
-  // ===================== OCULTAR CASAS BASE + LIMPIAR COLISIONES =====================
+  // ===================== POOLS: ESCOMBROS Y HUMO/FUEGO =====================
+  const dmats = [0xbdb3a2, 0x8a7f70, 0x5f5649, 0xd8d2c4].map(c => M(c));
+  const dpool = [];
+  for (let i = 0; i < CFG.maxDebris; i++) {
+    const m = new THREE.Mesh(G(1, 1, 1), dmats[i % dmats.length]);
+    m.visible = false; API.scene.add(m);
+    dpool.push({ m, v: V(0, 0, 0), w: V(0, 0, 0), t: 0, on: false });
+  }
+  let dHead = 0;
+  function spawnDebris(x, y, z, n, spread, scale) {
+    for (let k = 0; k < n; k++) {
+      const d = dpool[dHead]; dHead = (dHead + 1) % dpool.length;
+      const s = rnd(0.25, 0.8) * scale;
+      d.on = true; d.t = rnd(2.2, 4); d.m.visible = true;
+      d.m.position.set(x + rnd(-spread, spread), y + rnd(0, 0.8), z + rnd(-spread, spread));
+      d.m.scale.set(s * rnd(0.7, 1.5), s * rnd(0.6, 1.2), s * rnd(0.7, 1.5));
+      d.m.rotation.set(rnd(0, 6), rnd(0, 6), rnd(0, 6));
+      d.v.set(rnd(-3.5, 3.5), rnd(2.5, 6.5), rnd(-3.5, 3.5));
+      d.w.set(rnd(-6, 6), rnd(-6, 6), rnd(-6, 6));
+    }
+  }
+  function updateDebris(dt) {
+    for (const d of dpool) {
+      if (!d.on) continue;
+      d.t -= dt;
+      if (d.t <= 0) { d.on = false; d.m.visible = false; continue; }
+      d.v.y -= 18 * dt;
+      d.m.position.addScaledVector(d.v, dt);
+      if (d.m.position.y < 0.1) {
+        d.m.position.y = 0.1; d.v.y *= -0.3; d.v.x *= 0.6; d.v.z *= 0.6; d.w.multiplyScalar(0.5);
+      }
+      d.m.rotation.x += d.w.x * dt; d.m.rotation.y += d.w.y * dt; d.m.rotation.z += d.w.z * dt;
+    }
+  }
+
+  const FX = {
+    dust:  { col: 0xb9a886, life: 0.9, s: 0.5, grow: 1.2,  op: 0.8, up: 0.8 },
+    smoke: { col: 0x3a3a3a, life: 2.8, s: 0.8, grow: 0.6,  op: 0.6, up: 2.2 },
+    fire:  { col: 0xff7a1a, life: 0.45, s: 0.6, grow: -0.4, op: 0.9, up: 1.8 },
+  };
+  const fpool = [];
+  for (let i = 0; i < CFG.maxFx; i++) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xbbaa88, transparent: true, opacity: 0.8, depthWrite: false });
+    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 6, 5), mat);
+    m.visible = false; API.scene.add(m);
+    fpool.push({ m, mat, v: V(0, 0, 0), t: 0, life: 1, grow: 0, op: 0.8, on: false });
+  }
+  let fHead = 0;
+  function spawnFx(p, kind, n) {
+    const K = FX[kind]; n = n || 1;
+    for (let k = 0; k < n; k++) {
+      const f = fpool[fHead]; fHead = (fHead + 1) % fpool.length;
+      f.on = true; f.life = K.life * rnd(0.7, 1); f.t = f.life; f.grow = K.grow; f.op = K.op;
+      f.m.visible = true; f.mat.color.setHex(K.col); f.mat.opacity = K.op;
+      f.m.position.set(p.x + rnd(-1, 1), p.y + rnd(0, 1), p.z + rnd(-1, 1));
+      f.m.scale.setScalar(K.s * rnd(0.8, 1.4));
+      f.v.set(rnd(-0.8, 0.8), K.up * rnd(0.6, 1.2), rnd(-0.8, 0.8));
+    }
+  }
+  function updateFx(dt) {
+    for (const f of fpool) {
+      if (!f.on) continue;
+      f.t -= dt;
+      if (f.t <= 0) { f.on = false; f.m.visible = false; continue; }
+      f.m.position.addScaledVector(f.v, dt);
+      f.m.scale.multiplyScalar(1 + f.grow * dt);
+      f.mat.opacity = f.op * (f.t / f.life);
+    }
+  }
+
+  function breakSound() {
+    if (T_NOW - lastBreakSnd < CFG.breakSoundGap) return;
+    lastBreakSnd = T_NOW; API.playSound('clash');
+  }
+
+  // ===================== OCULTAR CASAS BASE =====================
   function hideBaseHouses() {
     let hidden = 0;
     API.scene.traverse(obj => {
       if (obj.isInstancedMesh && obj.material && obj.material.color) {
         const hex = obj.material.color.getHex();
-        if (hex === 0xd8d2c4 || hex === 0x883333 || hex === 0x6a2626 ||
-            hex === 0x5a3a1e || hex === 0x2d4a66) {
-          obj.visible = false;
-          hidden++;
+        if (hex === 0xd8d2c4 || hex === 0x883333 || hex === 0x6a2626 || hex === 0x5a3a1e || hex === 0x2d4a66) {
+          obj.visible = false; hidden++;
         }
       }
     });
-    // ⚠️ LIMPIAR COLISIONES FANTASMA
-    if (window.houses && Array.isArray(window.houses)) window.houses.length = 0;
-    if (window.houseList && Array.isArray(window.houseList)) window.houseList.length = 0;
-    if (window.coverObjs && Array.isArray(window.coverObjs)) window.coverObjs.length = 0;
-    if (window.bwalls && Array.isArray(window.bwalls)) window.bwalls.length = 0;
-    console.log(`🏚️ ${hidden} meshes base ocultados + colisiones limpiadas`);
+    console.log(`${hidden} meshes base ocultados`);
+  }
+  // Quita de una lista solo lo que estaba cerca de las casas base (deja árboles, etc.)
+  function pruneNear(arr, pts, r) {
+    if (!Array.isArray(arr)) return;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const e = arr[i]; if (!e) continue;
+      const cx = e.min ? (e.min.x + e.max.x) / 2 : e.x;
+      const cz = e.min ? (e.min.z + e.max.z) / 2 : e.z;
+      if (pts.some(p => Math.hypot(p.x - cx, p.z - cz) < r)) arr.splice(i, 1);
+    }
   }
 
-  // ===================== MATERIALES =====================
-  const MAT_HOUSE = {
-    win: new THREE.MeshLambertMaterial({
-      color: 0x6699bb,
-      emissive: 0x1a3355,
-      transparent: true,
-      opacity: 0.75,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-    winFrame: new THREE.MeshLambertMaterial({ color: 0x2a2a2a }),
-    door: new THREE.MeshLambertMaterial({ color: 0x3a2a1a }),
-    stairs: new THREE.MeshLambertMaterial({ color: 0x9a9a90 }),
-    rail: new THREE.MeshLambertMaterial({ color: 0x555555 }),
-    roof: new THREE.MeshLambertMaterial({ color: 0x7a3a2a }),
-    concrete: new THREE.MeshLambertMaterial({ color: 0xb8b8b0 }),
-    sandbag: new THREE.MeshLambertMaterial({ color: 0x9a8a5a }),
-    floor: new THREE.MeshLambertMaterial({ color: 0x8a4a3a }),
-  };
-  function houseWallMat(color) { return new THREE.MeshLambertMaterial({ color }); }
-
-  // ===================== CREAR VENTANA CON MARCO =====================
-  function makeWindow(winW, winH) {
-    const grp = new THREE.Group();
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(winW + 0.3, winH + 0.3, 0.15), MAT_HOUSE.winFrame);
-    grp.add(frame);
-    const glass = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), MAT_HOUSE.win);
-    glass.position.z = 0.09;
-    grp.add(glass);
-    const h = new THREE.Mesh(new THREE.BoxGeometry(winW, 0.08, 0.14), MAT_HOUSE.winFrame);
-    h.position.z = 0.08;
-    grp.add(h);
-    const v = new THREE.Mesh(new THREE.BoxGeometry(0.08, winH, 0.14), MAT_HOUSE.winFrame);
-    v.position.z = 0.08;
-    grp.add(v);
-    return grp;
+  // ===================== DISEÑO DE CADA CELDA DE FACHADA =====================
+  function cellKind(T, f, s, i, n) {
+    if (f === 0 && s.n === 'S') {
+      const isDoor = T.warehouse ? (i === n / 2 - 1 || i === n / 2) : (i === Math.floor(n / 2));
+      if (isDoor) return 'door';
+    }
+    if (T.glassy) return (i === 0 || i === n - 1) ? 'wall' : 'window';
+    if (T.shop) return 'window';
+    if (T.warehouse) return 'wall';
+    return (i % 2 === 1) ? 'window' : 'wall';
   }
 
-  // ===================== CONSTRUCTOR =====================
-  function buildHouse(x, z, type, hue) {
-    const g = new THREE.Group();
-    g.position.set(x, 0, z);
-
-    const W = [8, 9, 10, 7][type];
-    const D = [8, 9, 10, 9][type];
-    const floors = [2, 2, 1, 3][type];
-    const FLOOR_H = 4;
-    const T = 0.5;
-    const wallColor = hue || 0xd8d2c4;
-    const accentColor = 0x8a4a3a;
-    const wallMat = houseWallMat(wallColor);
-    const accentMat = houseWallMat(accentColor);
-    const doorGap = 2.2;
-
-    const groundFloor = new THREE.Group();
-    g.add(groundFloor);
-    const groundWalls = [];
-    const upperFloors = [];
-
-    for (let f = 0; f < floors; f++) {
-      const floorGroup = f === 0 ? groundFloor : new THREE.Group();
-      if (f > 0) { floorGroup.position.y = f * FLOOR_H; g.add(floorGroup); }
-      const mat = f === 0 ? wallMat : (f === 1 ? accentMat : wallMat);
-      const wallsThisFloor = [];
-      const yCenter = FLOOR_H / 2;
-
-      // Pared trasera
-      const backWall = new THREE.Mesh(new THREE.BoxGeometry(W, FLOOR_H, T), mat);
-      backWall.position.set(0, yCenter, -D/2);
-      backWall.castShadow = true; backWall.receiveShadow = true;
-      floorGroup.add(backWall);
-      wallsThisFloor.push({ mesh: backWall, hp: 100, maxHp: 100, pos: [0, yCenter, -D/2], cracked: false });
-
-      // Pared frontal con puerta (ground) o ventanas (upper)
-      if (f === 0) {
-        const sideW = (W - doorGap) / 2;
-        const left = new THREE.Mesh(new THREE.BoxGeometry(sideW, FLOOR_H, T), mat);
-        left.position.set(-(W/2 - sideW/2), yCenter, D/2);
-        left.castShadow = true; left.receiveShadow = true;
-        floorGroup.add(left);
-        wallsThisFloor.push({ mesh: left, hp: 100, maxHp: 100, pos: [-(W/2 - sideW/2), yCenter, D/2], cracked: false });
-
-        const right = new THREE.Mesh(new THREE.BoxGeometry(sideW, FLOOR_H, T), mat);
-        right.position.set(W/2 - sideW/2, yCenter, D/2);
-        right.castShadow = true; right.receiveShadow = true;
-        floorGroup.add(right);
-        wallsThisFloor.push({ mesh: right, hp: 100, maxHp: 100, pos: [W/2 - sideW/2, yCenter, D/2], cracked: false });
-
-        const lintel = new THREE.Mesh(new THREE.BoxGeometry(doorGap, FLOOR_H - 2.8, T), mat);
-        lintel.position.set(0, 2.8 + (FLOOR_H - 2.8) / 2, D/2);
-        lintel.castShadow = true;
-        floorGroup.add(lintel);
-        wallsThisFloor.push({ mesh: lintel, hp: 100, maxHp: 100, pos: [0, 2.8 + (FLOOR_H - 2.8) / 2, D/2], cracked: false });
-
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(doorGap - 0.2, 2.8), MAT_HOUSE.door);
-        door.position.set(0, 1.4, D/2 + 0.01);
-        floorGroup.add(door);
-      } else {
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(W, FLOOR_H, T), mat);
-        wall.position.set(0, yCenter, D/2);
-        wall.castShadow = true; wall.receiveShadow = true;
-        floorGroup.add(wall);
-        wallsThisFloor.push({ mesh: wall, hp: 100, maxHp: 100, pos: [0, yCenter, D/2], cracked: false });
-      }
-
-      // Pared izquierda (segunda puerta para tipo 1)
-      if (f === 0 && type === 1) {
-        const sideD = (D - doorGap) / 2;
-        const a = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, sideD), mat);
-        a.position.set(-W/2, yCenter, -(D/2 - sideD/2));
-        a.castShadow = true; a.receiveShadow = true;
-        floorGroup.add(a);
-        wallsThisFloor.push({ mesh: a, hp: 100, maxHp: 100, pos: [-W/2, yCenter, -(D/2 - sideD/2)], cracked: false });
-
-        const b = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, sideD), mat);
-        b.position.set(-W/2, yCenter, D/2 - sideD/2);
-        b.castShadow = true; b.receiveShadow = true;
-        floorGroup.add(b);
-        wallsThisFloor.push({ mesh: b, hp: 100, maxHp: 100, pos: [-W/2, yCenter, D/2 - sideD/2], cracked: false });
-
-        const lintel = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H - 2.8, doorGap), mat);
-        lintel.position.set(-W/2, 2.8 + (FLOOR_H - 2.8) / 2, 0);
-        lintel.castShadow = true;
-        floorGroup.add(lintel);
-        wallsThisFloor.push({ mesh: lintel, hp: 100, maxHp: 100, pos: [-W/2, 2.8 + (FLOOR_H - 2.8)/2, 0], cracked: false });
-
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(doorGap - 0.2, 2.8), MAT_HOUSE.door);
-        door.rotation.y = Math.PI / 2;
-        door.position.set(-W/2 - 0.01, 1.4, 0);
-        floorGroup.add(door);
-      } else {
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, D), mat);
-        wall.position.set(-W/2, yCenter, 0);
-        wall.castShadow = true; wall.receiveShadow = true;
-        floorGroup.add(wall);
-        wallsThisFloor.push({ mesh: wall, hp: 100, maxHp: 100, pos: [-W/2, yCenter, 0], cracked: false });
-      }
-
-      // Pared derecha
-      const rightWall = new THREE.Mesh(new THREE.BoxGeometry(T, FLOOR_H, D), mat);
-      rightWall.position.set(W/2, yCenter, 0);
-      rightWall.castShadow = true; rightWall.receiveShadow = true;
-      floorGroup.add(rightWall);
-      wallsThisFloor.push({ mesh: rightWall, hp: 100, maxHp: 100, pos: [W/2, yCenter, 0], cracked: false });
-
-      // Ventanas visibles con marco
-      const winY = FLOOR_H * 0.55;
-      const winW = 1.4, winH = 1.4;
-
-      if (f > 0) {
-        for (const wx of [-W/4, W/4]) {
-          const w = makeWindow(winW, winH); w.position.set(wx, winY, D/2 + 0.08); floorGroup.add(w);
-        }
-      } else if (type !== 0) {
-        for (const wx of [-W/3, W/3]) {
-          const w = makeWindow(winW, winH); w.position.set(wx, winY, D/2 + 0.08); floorGroup.add(w);
-        }
-      }
-      for (const wx of [-W/4, W/4]) {
-        const w = makeWindow(winW, winH); w.position.set(wx, winY, -D/2 - 0.08); w.rotation.y = Math.PI; floorGroup.add(w);
-      }
-      for (const wz of [-D/4, D/4]) {
-        const w1 = makeWindow(winW, winH); w1.position.set(-W/2 - 0.08, winY, wz); w1.rotation.y = -Math.PI / 2; floorGroup.add(w1);
-        const w2 = makeWindow(winW, winH); w2.position.set(W/2 + 0.08, winY, wz); w2.rotation.y = Math.PI / 2; floorGroup.add(w2);
-      }
-
-      // Losa intermedia
-      if (f < floors - 1) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.4, 0.3, D + 0.4), MAT_HOUSE.floor);
-        slab.position.y = (f + 1) * FLOOR_H + 0.15;
-        slab.castShadow = true; slab.receiveShadow = true;
-        g.add(slab);
-      }
-
-      if (f === 0) groundWalls.push(...wallsThisFloor);
-      else upperFloors.push({ walls: wallsThisFloor, group: floorGroup });
+  function windowDecor(mesh, s, cw, fh) {
+    const gl = new THREE.Mesh(axisGeo(s.axis, cw * 0.78, fh * 0.42, 0.05), MAT_GLASS);
+    gl.position.set(s.axis === 'x' ? 0 : s.nx * 0.27, 0.1, s.axis === 'x' ? s.nz * 0.27 : 0);
+    mesh.add(gl);
+  }
+  function doorDecor(fg, T, s, lx, lz, cw, fh) {
+    if (T.warehouse) {
+      // Dos postes metálicos, sin puerta: entrada amplia abierta
+      box(fg, 0.3, fh, 0.3, MAT_METAL, lx - cw / 2 + 0.15, fh / 2, lz + 0.2);
+      box(fg, 0.3, fh, 0.3, MAT_METAL, lx + cw / 2 - 0.15, fh / 2, lz + 0.2);
+      return;
     }
+    // Puerta abierta, apoyada a un lado del marco
+    box(fg, 0.1, 2.6, 0.9, MAT_DOOR, lx - cw * 0.42, 1.3, lz + 0.5);
+  }
 
-    // Escaleras
-    const sx = -W/2 - 1.5;
-    for (let i = 0; i < floors * FLOOR_H * 2; i++) {
-      const step = new THREE.Mesh(new THREE.BoxGeometry(2, 0.3, 0.6), MAT_HOUSE.stairs);
-      step.position.set(sx, 0.15 + i * 0.25, -D/2 + 1 + i * 0.55);
-      step.castShadow = true;
-      g.add(step);
-      if (step.position.z > D/2 - 1) break;
-    }
-    const railL = new THREE.Mesh(new THREE.BoxGeometry(0.08, floors * FLOOR_H + 1, 0.08), MAT_HOUSE.rail);
-    railL.position.set(sx - 1, FLOOR_H / 2, 0);
-    g.add(railL);
-
-    // Techo
-    if (type === 2) {
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.5, D + 1), MAT_HOUSE.concrete);
-      roof.position.y = FLOOR_H + 0.25; roof.castShadow = true; g.add(roof);
-      for (let i = 0; i < 12; i++) {
-        const s = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.4, 0.6), MAT_HOUSE.sandbag);
-        const a = (i / 12) * Math.PI * 2;
-        s.position.set(Math.cos(a) * (W/2 + 0.4), FLOOR_H + 0.8, Math.sin(a) * (D/2 + 0.4));
-        s.rotation.y = a;
-        g.add(s);
-      }
-    } else {
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.5, D + 1), MAT_HOUSE.roof);
-      roof.position.y = floors * FLOOR_H + 0.25; roof.castShadow = true; g.add(roof);
-      if (type === 0 || type === 3) {
-        const chim = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), MAT_HOUSE.floor);
-        chim.position.set(W/3, floors * FLOOR_H + 1, -D/3);
-        g.add(chim);
-      }
-    }
-
-    API.scene.add(g);
-
-    // Colisión
-    if (window.houses && Array.isArray(window.houses)) {
-      window.houses.push({ pos: null, min: V(x - W/2, 0, z - D/2), max: V(x + W/2, floors * FLOOR_H, z + D/2) });
-    }
-    // Slots IA
-    if (window.houseList && Array.isArray(window.houseList)) {
-      const slots = [];
-      const offsets = [[-3,-3.8],[3,-3.8],[-3.8,-3],[-3.8,3],[3.8,-3],[3.8,3],[-4,3.8],[4,3.8]];
-      for (const s of offsets) slots.push({ x: x + s[0], z: z + s[1], hx: x, hz: z, occ: null });
-      window.houseList.push({ x, z, slots });
-    }
-    if (window.coverObjs && Array.isArray(window.coverObjs)) {
-      window.coverObjs.push({ x, z, r: 7 });
-    }
-
+  // ===================== CONSTRUCTOR DE EDIFICIO =====================
+  function buildHouse(x, z, type, seed) {
+    const T = TYPES[type], fh = T.fh || CFG.fh, W = T.W, D = T.D, F = T.floors;
+    const TH = 0.5;
+    const g = new THREE.Group(); g.position.set(x, 0, z); API.scene.add(g);
+    const wallMat = M(T.wall);
     const b = {
-      mesh: g, groundFloor, groundWalls, upperFloors,
-      hp: 400 * floors, maxHp: 400 * floors,
-      state: 'intact', collapseT: 0,
-      x, z, W, D, floors, FLOOR_H,
-      radius: Math.max(W, D) / 2 + 0.5,
+      x, z, type, name: T.name, W, D, F, fh, g, seed,
+      groups: [], chunks: [], ground: [],
+      state: 'intact', collT: 0, landed: [], burnT: 0, fxT: 0,
+      R: Math.hypot(W, D) / 2,
     };
+    const sides = [
+      { n: 'N', axis: 'x', fixed: -D / 2, nx: 0,  nz: -1, L: W },
+      { n: 'S', axis: 'x', fixed: D / 2,  nx: 0,  nz: 1,  L: W },
+      { n: 'W', axis: 'z', fixed: -W / 2, nx: -1, nz: 0,  L: D },
+      { n: 'E', axis: 'z', fixed: W / 2,  nx: 1,  nz: 0,  L: D },
+    ];
+
+    for (let f = 0; f < F; f++) {
+      const fg = new THREE.Group(); fg.position.y = f * fh; g.add(fg); b.groups.push(fg);
+
+      for (const s of sides) {
+        const n = Math.max(2, Math.round(s.L / CFG.cell)), cw = s.L / n;
+        for (let i = 0; i < n; i++) {
+          const kind = cellKind(T, f, s, i, n);
+          const c0 = -s.L / 2 + cw * (i + 0.5);
+          const lx = s.axis === 'x' ? c0 : s.fixed;
+          const lz = s.axis === 'x' ? s.fixed : c0;
+
+          if (kind === 'door') { doorDecor(fg, T, s, lx, lz, cw, fh); continue; }
+
+          const isWin = kind === 'window';
+          const mesh = new THREE.Mesh(axisGeo(s.axis, cw, fh, TH), wallMat);
+          mesh.position.set(lx, fh / 2, lz);
+          mesh.castShadow = true; mesh.receiveShadow = true;
+          fg.add(mesh);
+          if (isWin) windowDecor(mesh, s, cw, fh);
+
+          // Balcón delante de las ventanas del frente (apartamentos)
+          if (T.balc && f >= 1 && s.n === 'S' && isWin) {
+            box(fg, cw * 0.9, 0.15, 1.1, MAT_SLAB, lx, 0.07, D / 2 + 0.55);
+            box(fg, cw * 0.9, 0.9, 0.05, MAT_RAIL, lx, 0.5, D / 2 + 1.1);
+          }
+
+          const hx = s.axis === 'x' ? cw / 2 : TH / 2;
+          const hz = s.axis === 'x' ? TH / 2 : cw / 2;
+          const hp = isWin ? CFG.glassHp : CFG.wallHp;
+          const c = {
+            b, f, s, kind, mesh, dead: false, hp, maxHp: hp, mat: null, cracks: [],
+            box: { x0: lx - hx, x1: lx + hx, z0: lz - hz, z1: lz + hz, y0: f * fh, y1: (f + 1) * fh },
+            coll: null, bw: null,
+          };
+          b.chunks.push(c);
+
+          if (f === 0) {
+            b.ground.push(c);
+            // Colisión de movimiento (pisos bajos)
+            const hs = world('houses');
+            c.coll = { pos: null, min: V(x + c.box.x0, 0, z + c.box.z0), max: V(x + c.box.x1, fh, z + c.box.z1) };
+            if (Array.isArray(hs)) hs.push(c.coll);
+          }
+        }
+      }
+
+      // Losa entre pisos (decorativa, cae con su piso)
+      if (f < F - 1) box(fg, W + 0.3, 0.3, D + 0.3, MAT_SLAB, 0, fh - 0.15, 0);
+      // Aires acondicionados (lado este)
+      if (T.ac && f % 2 === 0 && f > 0) box(fg, 1.2, 0.9, 1.0, MAT_AC, W / 2 + 0.6, 0.6, 0);
+    }
+
+    // Decoración de planta baja
+    const g0 = b.groups[0];
+    if (T.porch) {
+      box(g0, 0.3, fh, 0.3, MAT_COL, -1.8, fh / 2, D / 2 + 1.2);
+      box(g0, 0.3, fh, 0.3, MAT_COL,  1.8, fh / 2, D / 2 + 1.2);
+      box(g0, 4.2, 0.25, 2.6, MAT_ROOF, 0, fh - 0.2, D / 2 + 1.2);
+    }
+    if (T.shop) {
+      for (let k = 0; k < 6; k++) box(g0, W / 6, 0.14, 1.6, k % 2 ? MAT_AWN_B : MAT_AWN_A, -W / 2 + W / 12 + k * W / 6, 3.4, D / 2 + 0.8);
+      box(g0, W * 0.6, 0.7, 0.15, MAT_SIGN, 0, 3.9, D / 2 + 0.1);
+    }
+
+    // Techo en el último piso
+    const tg = b.groups[F - 1];
+    if (T.roof === 'pitch') {
+      const r1 = box(tg, W + 0.8, 0.3, D / 2 + 0.9, MAT_ROOF, 0, fh + 0.7, -D / 4); r1.rotation.x = -0.5;
+      const r2 = box(tg, W + 0.8, 0.3, D / 2 + 0.9, MAT_ROOF, 0, fh + 0.7, D / 4); r2.rotation.x = 0.5;
+      if (T.chimney) box(tg, 0.8, 1.6, 0.8, M(0x6b4a3a), W / 3, fh + 1.2, -D / 3);
+    } else {
+      box(tg, W + 0.6, 0.35, D + 0.6, MAT_SLAB, 0, fh + 0.18, 0);
+      if (T.ac) box(tg, 2.4, 1.0, 1.8, MAT_AC, -W / 4, fh + 0.7, 0);
+    }
+
+    // Registro para la IA (puertas y cobertura)
+    const hl = world('houseList');
+    if (Array.isArray(hl)) {
+      const slots = [];
+      const offs = [[-3, -3.8], [3, -3.8], [-3.8, -3], [-3.8, 3], [3.8, -3], [3.8, 3], [-4, 3.8], [4, 3.8]];
+      for (const o of offs) slots.push({ x: x + o[0], z: z + o[1], hx: x, hz: z, occ: null });
+      hl.push({ x, z, slots });
+    }
+    const co = world('coverObjs');
+    if (Array.isArray(co)) co.push({ x, z, r: Math.max(W, D) / 2 });
+
     buildings.push(b);
     return b;
   }
 
-  // ===================== REEMPLAZAR CASAS BASE =====================
-  function replaceBaseHouses() {
-    const positions = [];
-    if (window.houseList && Array.isArray(window.houseList)) {
-      for (const h of window.houseList) {
-        if (h && h.x !== undefined) positions.push({ x: h.x, z: h.z });
-      }
-      window.houseList.length = 0;
-    }
-    if (window.coverObjs && Array.isArray(window.coverObjs)) window.coverObjs.length = 0;
-    if (window.houses && Array.isArray(window.houses)) window.houses.length = 0;
-
-    let replaced = 0;
-    positions.forEach((p, i) => {
-      if (p.z >= RIVER.zMin - 3 && p.z <= RIVER.zMax + 3) return;
-      if (Math.abs(p.x) > 128) return;
-      const type = i % 4;
-      const hue = [0xd8d2c4, 0xc8b8a0, 0xb8c8d0, 0xd0c0a0][i % 4];
-      buildHouse(p.x, p.z, type, hue);
-      replaced++;
-    });
-
-    // Casas extra en posiciones estratégicas
-    const extraHouses = [
-      [-45, 20], [45, 20], [-45, -20], [45, -20],
-      [-90, -170], [90, 170],
-      [-160, -80], [160, -80], [-160, 80], [160, 80],
-      [-30, -240], [30, -240], [-30, 240], [30, 240],
-      [-70, -140], [70, -140], [-70, 140], [70, 140],
-      [-110, 0], [110, 0],
-    ];
-    extraHouses.forEach(([bx, bz], i) => {
-      if (Math.abs(bx) > 128) return;
-      if (bz >= RIVER.zMin - 3 && bz <= RIVER.zMax + 3) return;
-      for (const h of buildings) if (Math.hypot(bx - h.x, bz - h.z) < 14) return;
-      const type = (i + 1) % 4;
-      const hue = [0xc8b8a0, 0xb8c8d0, 0xd0c0a0, 0xd8d2c4][i % 4];
-      buildHouse(bx, bz, type, hue);
-      replaced++;
-    });
-
-    console.log(`🏘️ ${replaced} casas destructibles colocadas`);
+  // ===================== DAÑO =====================
+  function worldCenter(b, c) {
+    return V(b.x + (c.box.x0 + c.box.x1) / 2, (c.box.y0 + c.box.y1) / 2, b.z + (c.box.z0 + c.box.z1) / 2);
   }
-
-  // ===================== DAÑO + DESTRUCCIÓN =====================
-  function damageWall(b, wall, dmg) {
-    if (wall.hp <= 0) return;
-    wall.hp -= dmg;
-    const ratio = Math.max(0, wall.hp / wall.maxHp);
-    if (wall.mesh.material && wall.mesh.material.color) {
-      const c = wall.mesh.material.color;
-      c.r = Math.min(1, c.r * 0.85 + 0.15 + (1 - ratio) * 0.15);
-      c.g = Math.max(0, c.g * (0.75 + ratio * 0.15));
-      c.b = Math.max(0, c.b * (0.75 + ratio * 0.15));
-    }
-    wall.mesh.position.y = wall.pos[1] + (Math.random() - 0.5) * 0.15;
-    spawnDust(V(b.x + wall.pos[0], wall.pos[1], b.z + wall.pos[2]));
-    if (wall.hp <= 0) {
-      wall.mesh.visible = false;
-      spawnFlyingDebris(V(b.x + wall.pos[0], wall.pos[1] + 1, b.z + wall.pos[2]), 6);
-      API.playSound('clash');
-      if (b.groundWalls.every(w => w.hp <= 0)) triggerCollapse(b);
+  function addCracks(c, n) {
+    const s = c.s;
+    const span = s.axis === 'x' ? (c.box.x1 - c.box.x0) : (c.box.z1 - c.box.z0);
+    for (let i = 0; i < n; i++) {
+      const len = rnd(0.5, 1.1);
+      const cr = new THREE.Mesh(axisGeo(s.axis, 0.07, len, 0.05), MAT_CRACK);
+      cr.rotation.z = rnd(-0.6, 0.6);
+      const along = rnd(-span * 0.35, span * 0.35), y = rnd(-1.0, 1.0);
+      if (s.axis === 'x') cr.position.set(along, y, s.nz * 0.27);
+      else cr.position.set(s.nx * 0.27, y, along);
+      c.mesh.add(cr); c.cracks.push(cr);
     }
   }
-  function triggerCollapse(b) {
+  function damageChunk(c, dmg, at) {
+    if (c.dead) return;
+    c.hp -= dmg;
+    const ratio = Math.max(0, c.hp / c.maxHp);
+    if (c.hp > 0) {
+      if (!c.mat) { c.mat = c.mesh.material.clone(); c.mesh.material = c.mat; }
+      c.mat.color.multiplyScalar(0.94);
+      if (ratio < 0.55 && c.cracks.length < 2) addCracks(c, 2);
+      if (ratio < 0.3 && c.cracks.length < 5) addCracks(c, 2);
+      spawnFx(at || worldCenter(c.b, c), 'dust', 2);
+      return;
+    }
+    killChunk(c, at);
+  }
+  function killChunk(c, at) {
+    const b = c.b;
+    c.dead = true; c.mesh.visible = false;
+    if (c.coll) { c.coll.min.set(FAR, 0, FAR); c.coll.max.set(FAR, 0, FAR); }
+    const p = at || worldCenter(b, c);
+    spawnDebris(p.x, p.y, p.z, c.kind === 'window' ? 4 : 7, 0.8, c.kind === 'window' ? 0.5 : 0.9);
+    spawnFx(p, 'dust', 6);
+    breakSound();
+    checkCollapse(b);
+  }
+
+  // ===================== COLAPSO =====================
+  function checkCollapse(b) {
     if (b.state !== 'intact') return;
-    b.state = 'collapsing';
-    b.collapseT = 0;
-    playDestroySound();
-    shakeAmount = Math.max(shakeAmount, 4);
-    API.say('💥 ¡Edificio colapsando!');
+    const alive = b.ground.filter(c => !c.dead).length;
+    const frac = alive / Math.max(1, b.ground.length);
+    const limit = b.F > 1 ? 0.45 : 0.25;
+    if (frac < limit) startCollapse(b);
+  }
+  function startCollapse(b) {
+    b.state = 'collapsing'; b.collT = 0; b.landed = [];
+    API.say && API.say('💥 ¡' + b.name + ' colapsando!');
+    API.playSound('explosion');
+    shakeAmount = Math.max(shakeAmount, 3.5);
+    spawnFx(V(b.x, 2, b.z), 'dust', 14);
+  }
+  function onFloorLanded(b, f) {
+    const p = V(b.x, f * b.fh + 1, b.z);
+    spawnDebris(p.x, p.y, p.z, 8, b.W / 3, 1.2);
+    spawnFx(p, 'dust', 8);
+    breakSound();
+    shakeAmount = Math.max(shakeAmount, 2);
+  }
+  function disableBuilding(b) {
+    const hl = world('houseList');
+    if (Array.isArray(hl)) for (const h of hl) if (h && h.x === b.x && h.z === b.z) { h.x = FAR; h.z = FAR; for (const s of h.slots) s.occ = null; }
+    const co = world('coverObjs');
+    if (Array.isArray(co)) for (const c of co) if (c && c.x === b.x && c.z === b.z) { c.x = FAR; c.z = FAR; c.r = 0; }
+  }
+  function finishCollapse(b) {
+    b.state = 'destroyed'; b.burnT = 40; b.fxT = 0;
+    for (const grp of b.groups) grp.visible = false;
+    for (const c of b.chunks) { c.dead = true; if (c.coll) { c.coll.min.set(FAR, 0, FAR); c.coll.max.set(FAR, 0, FAR); } }
+    // Escombros permanentes dentro de la huella
+    for (let i = 0; i < 8; i++) {
+      const r = box(b.g, rnd(1, 3), rnd(0.3, 0.9), rnd(1, 2.6), i % 2 ? M(0x6a5a4a) : M(0x4a3a2a),
+        rnd(-b.W * 0.4, b.W * 0.4), rnd(0.2, 0.6), rnd(-b.D * 0.4, b.D * 0.4));
+      r.rotation.set(rnd(-0.3, 0.3), rnd(0, 3), rnd(-0.3, 0.3));
+    }
+    disableBuilding(b);
+    spawnFx(V(b.x, 1, b.z), 'smoke', 6);
   }
   function updateBuildings(dt) {
     for (const b of buildings) {
       if (b.state === 'collapsing') {
-        b.collapseT += dt;
-        const t = b.collapseT;
-        if (t < 0.4) {
-          b.groundFloor.position.x = Math.sin(t * 80) * 0.08;
-          b.groundFloor.position.z = Math.cos(t * 70) * 0.08;
-        } else if (t < 1.4) {
-          const k = (t - 0.4);
-          const ease = k * k;
-          for (const uf of b.upperFloors) {
-            uf.group.position.x = 0; uf.group.position.z = 0;
-            uf.group.position.y = uf.group.position.y - ease * 0.5 - 2.2 * (k > 0.5 ? (k - 0.5) * 2 : 0);
-            uf.group.rotation.z = Math.sin(k * Math.PI) * 0.22;
-          }
-          if (Math.random() < 0.5) spawnDust(V(b.x + rnd(-3, 3), 3, b.z + rnd(-3, 3)));
-        } else if (t < 2.4) {
-          const k = (t - 1.4);
-          const ease = k * k;
-          for (const uf of b.upperFloors) {
-            uf.group.position.y = 1.8 - ease * 1.8;
-            uf.group.rotation.z = 0.22 + ease * 0.4;
-          }
-          if (Math.random() < 0.6) spawnDust(V(b.x + rnd(-4, 4), 1.5, b.z + rnd(-4, 4)));
-        } else {
-          b.state = 'destroyed';
-          spawnSmokePlume(V(b.x, 1, b.z));
-          shakeAmount = Math.max(shakeAmount, 4);
-          for (const uf of b.upperFloors) uf.group.visible = false;
-          b.groundFloor.visible = false;
-          // Escombros persistentes
-          const rubbleMat = new THREE.MeshLambertMaterial({ color: 0x6a5a4a });
-          const rubbleMat2 = new THREE.MeshLambertMaterial({ color: 0x4a3a2a });
-          for (let i = 0; i < 30; i++) {
-            const r = new THREE.Mesh(
-              new THREE.BoxGeometry(rnd(0.4, 1.8), rnd(0.2, 0.9), rnd(0.4, 1.6)),
-              Math.random() < 0.5 ? rubbleMat : rubbleMat2
-            );
-            r.position.set(b.x + rnd(-4, 4), rnd(0.15, 1.5), b.z + rnd(-4, 4));
-            r.rotation.set(rnd(0, 3), rnd(0, 3), rnd(0, 3));
-            r.castShadow = true;
-            API.scene.add(r);
-          }
-          // Fuego parpadeante
-          b.fires = [];
-          for (let i = 0; i < 3; i++) {
-            const fire = new THREE.Mesh(
-              new THREE.SphereGeometry(rnd(0.4, 0.7), 6, 5),
-              new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.9 })
-            );
-            fire.position.set(b.x + rnd(-3, 3), rnd(0.3, 1.2), b.z + rnd(-3, 3));
-            API.scene.add(fire);
-            b.fires.push({ mesh: fire, t: Math.random() * 10, baseY: fire.position.y });
-          }
-          b.smokeTimer = 0;
-          // Quitar colisión
-          if (window.houses && Array.isArray(window.houses)) {
-            const idx = window.houses.findIndex(h => h && h.min &&
-              Math.abs(h.min.x - (b.x - b.W/2)) < 0.5 &&
-              Math.abs(h.min.z - (b.z - b.D/2)) < 0.5);
-            if (idx >= 0) window.houses.splice(idx, 1);
-          }
+        b.collT += dt;
+        let allLanded = true;
+        for (let f = b.F - 1; f >= 0; f--) {
+          const tau = b.collT - (b.F - 1 - f) * 0.22;   // el piso de arriba cae primero
+          const grp = b.groups[f];
+          if (tau <= 0) { allLanded = false; continue; }
+          const y0 = f * b.fh, rest = 0.15;
+          let y = y0 - 0.5 * GRAV * tau * tau;
+          if (y <= rest) {
+            y = rest;
+            if (!b.landed[f]) { b.landed[f] = true; onFloorLanded(b, f); }
+          } else allLanded = false;
+          grp.position.y = y;
+          grp.rotation.x = Math.min(0.35, tau * 0.25) * (f % 2 ? 1 : -1);
+          grp.rotation.z = Math.min(0.2, tau * 0.12) * (f % 2 ? -1 : 1);
         }
-      }
-      // Fuego continuo
-      if (b.state === 'destroyed' && b.fires) {
-        for (const f of b.fires) {
-          f.t += dt;
-          const s = 0.7 + Math.sin(f.t * 8) * 0.3 + Math.random() * 0.2;
-          f.mesh.scale.setScalar(s);
-          f.mesh.position.y = f.baseY + Math.sin(f.t * 4) * 0.1;
-          f.mesh.material.opacity = 0.7 + Math.sin(f.t * 6) * 0.25;
-        }
-        b.smokeTimer = (b.smokeTimer || 0) + dt;
-        if (b.smokeTimer > 0.6) {
-          b.smokeTimer = 0;
-          const smoke = new THREE.Mesh(
-            new THREE.SphereGeometry(rnd(0.6, 1.2), 6, 5),
-            new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.6, depthWrite: false })
-          );
-          smoke.position.set(b.x + rnd(-2, 2), 1.5, b.z + rnd(-2, 2));
-          API.scene.add(smoke);
-          // Fade out
-          let t = 0;
-          const iv = setInterval(() => {
-            t += 0.1;
-            smoke.position.y += 0.2;
-            smoke.material.opacity = 0.6 * (1 - t / 3.5);
-            if (t > 3.5) { API.scene.remove(smoke); clearInterval(iv); }
-          }, 100);
+        if (allLanded && b.collT > 0.5) finishCollapse(b);
+      } else if (b.state === 'destroyed' && b.burnT > 0) {
+        b.burnT -= dt; b.fxT -= dt;
+        if (b.fxT <= 0) {
+          b.fxT = 0.35;
+          const fp = V(b.x + rnd(-3, 3), 0.6, b.z + rnd(-3, 3));
+          spawnFx(fp, 'fire', 1);
+          spawnFx(V(fp.x, 1.5, fp.z), 'smoke', 1);
         }
       }
     }
   }
 
-  // ===================== RESOLVER DAÑO A CASAS =====================
-  const _prev = new THREE.Vector3();
-  function resolveHouseDamage() {
-    for (let i = API.projectiles.length - 1; i >= 0; i--) {
-      const pr = API.projectiles[i];
+  // ===================== PROYECTILES Y EXPLOSIONES =====================
+  function findHit(x, y, z) {
+    for (const b of buildings) {
+      if (b.state !== 'intact') continue;
+      const dx = x - b.x, dz = z - b.z;
+      if (Math.abs(dx) > b.W / 2 + 0.8 || Math.abs(dz) > b.D / 2 + 0.8) continue;
+      for (const c of b.chunks) {
+        if (c.dead) continue;
+        const a = c.box;
+        if (dx > a.x0 - 0.25 && dx < a.x1 + 0.25 && dz > a.z0 - 0.25 && dz < a.z1 + 0.25 &&
+            y > a.y0 - 0.25 && y < a.y1 + 0.25) return c;
+      }
+    }
+    return null;
+  }
+  function resolveProjectiles() {
+    const list = API.projectiles;
+    if (!Array.isArray(list)) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const pr = list[i];
       if (!pr || !pr.mesh) continue;
-      const pPos = pr.mesh.position;
-      _prev.copy(pPos).addScaledVector(pr.dir, -100 * 0.05);
-      let consumed = false;
-      for (const b of buildings) {
-        if (b.state === 'destroyed') continue;
-        const minX = b.x - b.W/2 - 2, maxX = b.x + b.W/2 + 2;
-        const minZ = b.z - b.D/2 - 2, maxZ = b.z + b.D/2 + 2;
-        const inX = pPos.x > minX && pPos.x < maxX;
-        const inZ = pPos.z > minZ && pPos.z < maxZ;
-        const inXp = _prev.x > minX && _prev.x < maxX;
-        const inZp = _prev.z > minZ && _prev.z < maxZ;
-        if ((inX && inZ) || (inXp && inZp)) {
-          if (pPos.y < 4.5) {
-            let best = null, bd = 1e9;
-            for (const w of b.groundWalls) {
-              if (w.hp <= 0) continue;
-              const wx = b.x + w.pos[0], wz = b.z + w.pos[2];
-              const d = Math.hypot(pPos.x - wx, pPos.z - wz);
-              if (d < bd) { bd = d; best = w; }
-            }
-            if (best) { damageWall(b, best, pr.damage); shakeAmount = Math.max(shakeAmount, 0.4); consumed = true; }
-          } else if (pPos.y < 9) {
-            for (const uf of b.upperFloors) {
-              for (const w of uf.walls) {
-                if (w.hp <= 0) continue;
-                const wx = b.x + w.pos[0], wz = b.z + w.pos[2];
-                if (Math.hypot(pPos.x - wx, pPos.z - wz) < 4.5) {
-                  w.hp -= pr.damage;
-                  if (w.hp <= 0) { w.mesh.visible = false; spawnDust(V(b.x + w.pos[0], uf.group.position.y + w.pos[1], b.z + w.pos[2])); }
-                  consumed = true; break;
-                }
-              }
-              if (consumed) break;
-            }
-          }
-          if (consumed) break;
-        }
+      const p = pr.mesh.position;
+      const sx = pr.prevX !== undefined ? pr.prevX : p.x;
+      const sy = pr.prevY !== undefined ? pr.prevY : p.y;
+      const sz = pr.prevZ !== undefined ? pr.prevZ : p.z;
+      let hit = null, hitPt = null;
+      for (let k = 0; k <= 3 && !hit; k++) {   // barrido del segmento para no atravesar paredes
+        const t = k / 3;
+        const x = sx + (p.x - sx) * t, y = sy + (p.y - sy) * t, z = sz + (p.z - sz) * t;
+        hit = findHit(x, y, z);
+        if (hit) hitPt = V(x, y, z);
       }
-      if (consumed) {
+      pr.prevX = p.x; pr.prevY = p.y; pr.prevZ = p.z;
+      if (hit) {
+        damageChunk(hit, pr.damage || 25, hitPt);
         API.scene.remove(pr.mesh);
-        API.projectiles.splice(i, 1);
+        list.splice(i, 1);
       }
     }
   }
+  // Daño en área (bombas, explosiones). Ej: CasasSystem.blast(pos, 7, 400)
+  function blast(pos, radius, dmg) {
+    for (const b of buildings) {
+      if (b.state !== 'intact') continue;
+      if (Math.hypot(pos.x - b.x, pos.z - b.z) > b.R + radius) continue;
+      for (const c of b.chunks.slice()) {
+        if (c.dead) continue;
+        const p = worldCenter(b, c);
+        const d = p.distanceTo(pos);
+        if (d < radius) damageChunk(c, dmg * (1 - (d / radius) * 0.6), p);
+      }
+    }
+    spawnFx(pos, 'dust', 10);
+    shakeAmount = Math.max(shakeAmount, 2);
+  }
 
-  // ===================== APLICAR SHAKE =====================
+  // Línea de tiro: la IA sólo considera tapada una línea si hay pared baja intacta
+  function segBlocked(ax, az, bx, bz) {
+    const dist = Math.hypot(bx - ax, bz - az), n = Math.max(2, Math.ceil(dist / 1.5));
+    for (let i = 1; i < n; i++) {
+      const t = i / n, x = ax + (bx - ax) * t, z = az + (bz - az) * t;
+      for (const b of buildings) {
+        if (b.state !== 'intact') continue;
+        const dx = x - b.x, dz = z - b.z;
+        if (Math.abs(dx) > b.W / 2 || Math.abs(dz) > b.D / 2) continue;
+        for (const c of b.ground) {
+          if (c.dead) continue;
+          const a = c.box;
+          if (dx > a.x0 && dx < a.x1 && dz > a.z0 && dz < a.z1) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // ===================== CAMBIO EN LOS DEFAULTS DEL JUEGO =====================
+  function installOverrides() {
+    // Las balas ya no se frenan por la lista antigua: el mod decide cuándo hay impacto
+    window.bulletBlocked = function () { return false; };
+    window.losClear = function (a, b) { return !segBlocked(a.x, a.z, b.x, b.z); };
+    const origExp = window.spawnExplosion;
+    if (typeof origExp === 'function') {
+      window.spawnExplosion = function (pos) { origExp(pos); blast(pos, 7, 400); };
+    }
+  }
+
+  // ===================== REEMPLAZO DE CASAS BASE =====================
+  function replaceBaseHouses() {
+    const hl = world('houseList') || [];
+    const base = [];
+    for (const h of hl) if (h && h.x !== undefined) base.push({ x: h.x, z: h.z });
+    pruneNear(world('houses'), base, 9);
+    pruneNear(world('coverObjs'), base, 9);
+    if (Array.isArray(hl)) hl.length = 0;
+
+    const SEQ = [0, 1, 2, 3, 1, 5, 0, 4, 2, 5, 3, 1, 0, 2];
+    let count = 0;
+    base.forEach((p, i) => {
+      if (count >= CFG.maxBuildings) return;
+      if (p.z >= RIVER.zMin - 3 && p.z <= RIVER.zMax + 3) return;
+      if (Math.abs(p.x) > 128) return;
+      buildHouse(p.x, p.z, SEQ[i % SEQ.length], i); count++;
+    });
+    const extras = [[-45, 20], [45, 20], [-45, -20], [45, -20], [-90, -170], [90, 170],
+      [-160, -80], [160, -80], [-160, 80], [160, 80], [-30, -240], [30, -240], [-30, 240], [30, 240],
+      [-70, -140], [70, -140], [-70, 140], [70, 140], [-110, 0], [110, 0]];
+    extras.forEach(([bx, bz], i) => {
+      if (count >= CFG.maxBuildings) return;
+      if (Math.abs(bx) > 128) return;
+      if (bz >= RIVER.zMin - 3 && bz <= RIVER.zMax + 3) return;
+      if (buildings.some(h => Math.hypot(bx - h.x, bz - h.z) < 14)) return;
+      buildHouse(bx, bz, SEQ[(i + 3) % SEQ.length], i + 50); count++;
+    });
+    console.log(`${buildings.length} edificios destructibles colocados`);
+  }
+
   function applyShake(dt) {
     if (shakeAmount > 0.02) {
       API.camera.position.x += (Math.random() - 0.5) * shakeAmount;
@@ -593,19 +549,22 @@
   setTimeout(() => {
     hideBaseHouses();
     replaceBaseHouses();
+    installOverrides();
   }, 150);
 
-  // ===================== HOOK =====================
   const prevOnUpdate = API.onUpdate;
   API.onUpdate = function (dt) {
     if (typeof prevOnUpdate === 'function') {
       try { prevOnUpdate(dt); } catch (e) { console.error(e); }
     }
+    T_NOW += dt;
     updateBuildings(dt);
-    resolveHouseDamage();
+    resolveProjectiles();
+    updateDebris(dt);
+    updateFx(dt);
     applyShake(dt);
   };
 
-  window.CasasSystem = { version: '1.0', buildings };
-  console.log(`🏘️ Mod Casas Destructibles v1.0 listo.`);
+  window.CasasSystem = { version: '2.0', buildings, blast, addCracks: undefined };
+  console.log('Mod Casas Destructibles v2.0 listo.');
 })();
