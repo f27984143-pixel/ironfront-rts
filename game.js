@@ -345,7 +345,6 @@ function createEnvironment() {
   const mk=(geo,mat,list,shadow,rot)=>{ const m=new THREE.InstancedMesh(geo,mat,Math.max(1,list.length)); m.frustumCulled=false; m.castShadow=shadow; m.receiveShadow=shadow;
   list.forEach((v,i)=>{ D.position.set(v[0],v[1],v[2]); D.scale.set(v[3]||1,v[4]||1,v[5]||1); D.rotation.set(0,rot?(v[3]*0)+v[4]*0:0,0); D.updateMatrix(); m.setMatrixAt(i,D.matrix); }); m.instanceMatrix.needsUpdate=true; scene.add(m); return m; };
   const box=new THREE.BoxGeometry(1,1,1);
-  WIN.forEach((v,i)=>{ D.position.set(v[0],v[1],v[2]); D.scale.set(v[3]?1.4:1.8,2.6,v[3]?1.8:1.4); D.rotation.set(0,0,0); D.updateMatrix(); wm.setMatrixAt(i,D.matrix); }); wm.instanceMatrix.needsUpdate=true; scene.add(wm);
   mk(new THREE.CylinderGeometry(0.4,0.5,1,6),new THREE.MeshLambertMaterial({color:0x594630}),TR,true);
   mk(new THREE.ConeGeometry(0.5,1,7),new THREE.MeshLambertMaterial({color:0x2f5f33}),CR,true);
 }
@@ -824,6 +823,7 @@ function handleMapClick(e) {
         // Los aviones/helis no usan target, pero por si acaso
         if (unit.target) unit.target.set(dest.x + offsetX, unit.mesh.position.y, dest.z + offsetZ);
         unit.manualTarget = true;
+        unit.playerOrder = true;   // la IA no debe quitarle esta orden
       });
     } else clearSelection();
   }
@@ -1073,7 +1073,7 @@ function updateAI(delta) {
         dir.normalize(); let nextPos = up.clone().add(dir.multiplyScalar(u.speed * delta)); tryMove(u,nextPos);
         if(!closestEnemy && u.turret) { u.mesh.rotation.y=Math.atan2(u.target.x-up.x,u.target.z-up.z); u.turret.rotation.set(0,0,0); } else if(!closestEnemy) { u.mesh.lookAt(u.target.x, up.y, u.target.z); }
       }
-      else u.manualTarget = false;
+      else { u.manualTarget = false; u.playerOrder = false; }
     }
   }));
   updateProjectiles(delta);
