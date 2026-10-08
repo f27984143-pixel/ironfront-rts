@@ -559,7 +559,8 @@ function setupControls() {
   document.getElementById('btn-select-all').addEventListener('click', () => {
     if(directControlActive) toggleDirectControl();
     clearSelection();
-    soldiers.concat(vehicles, tanks).filter(u => u.team === 'ally' && u.hp > 0).forEach(selectUnit);
+    // Solo unidades visibles y libres: no marines dentro de transportes/barcos ni muertas
+    soldiers.concat(vehicles, tanks).filter(u => u.team === 'ally' && u.hp > 0 && !u.isDead && !u.inHeli && !u.marine && u.mesh.visible).forEach(selectUnit);
   });
   document.getElementById('btn-direct-control').addEventListener('click', toggleDirectControl);
   const btnAirstrike = document.getElementById('btn-airstrike');
