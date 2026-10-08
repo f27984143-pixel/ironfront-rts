@@ -836,7 +836,7 @@ function handleMapClick(e) {
 
 
 /* ============ RUTAS: A* sobre cuadrícula (rodea edificios, árboles y río) ============ */
-function findPath(sx, sz, tx, tz, r) {
+function findPath(sx, sz, tx, tz, r, maxExp) {
   const cs = 1.5, M = 25;
   const minX = Math.max(-150, Math.min(sx, tx) - M), maxX = Math.min(150, Math.max(sx, tx) + M);
   const minZ = Math.max(-220, Math.min(sz, tz) - M), maxZ = Math.min(220, Math.max(sz, tz) + M);
@@ -863,7 +863,8 @@ function findPath(sx, sz, tx, tz, r) {
   push({ i: si, j: sj, g: 0, f: h(si, sj) });
   const DIRS = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.414],[1,-1,1.414],[-1,1,1.414],[-1,-1,1.414]];
   let found = false, expandos = 0;
-  while (heap.length && expandos < 30000) {
+  const LIMITE = maxExp || 30000;
+  while (heap.length && expandos < LIMITE) {
     const cur = pop(); expandos++;
     const ck = key(cur.i, cur.j);
     if (cur.g > (gScore.get(ck) ?? Infinity)) continue;
@@ -1127,7 +1128,17 @@ function updateAI(delta) {
           } else { let cannonTip = new THREE.Vector3(0, 0.2, 4); u.turret.localToWorld(cannonTip); fireProjectile(cannonTip, closestEnemy, 0xffaa00, u.type==='tank'?150:50, u.team); playSound('shot'); u.cooldown = u.type==='tank'?2.0:0.6; }
         }
       }
-      if (u.team === 'enemy' && !u.manualTarget && !u.cover && !(u.path&&u.path.length) && up.distanceTo(u.target) < (isS?3:6)) u.target.set((Math.random()-0.5)*180, isS?1:0, (Math.random()-0.5)*180);
+      if (u.team === 'enemy' && !u.manualTarget && !u.cover && !(u.path&&u.path.length) && !(u.route&&u.route.length) && up.distanceTo(u.target) < (isS?3:6)) u.target.set((Math.random()-0.5)*180, isS?1:0, (Math.random()-0.5)*180);
+      // IA: si el destino está lejos, calcular una ruta que rodee edificios (cada 4 s como máximo)
+      if (u.route && u.routeFor && Math.hypot(u.routeFor.x - u.target.x, u.routeFor.z - u.target.z) > 2.5) u.route = null;
+      if (!u.route && !u.playerOrder && !u.cover && up.distanceTo(u.target) > 8) {
+        u.routeT = (u.routeT || 0) - delta;
+        if (u.routeT <= 0) {
+          u.routeT = 4 + Math.random() * 2;
+          const rt = findPath(up.x, up.z, u.target.x, u.target.z, u.radius || 1, 5000);
+          if (rt.length) { u.route = rt; u.routeFor = { x: u.target.x, z: u.target.z }; }
+        }
+      }
       if (u.route && u.route.length) {
         const w = u.route[0];
         if (Math.hypot(w.x - up.x, w.z - up.z) < 1.0) u.route.shift();
