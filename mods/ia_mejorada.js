@@ -42,7 +42,7 @@
 
   // ======================== HUD ========================
   const hud = document.createElement('div');
-  hud.style.cssText = 'position:fixed;top:150px;right:6px;z-index:26;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 9px;font:11px sans-serif;color:#fff;min-width:170px;backdrop-filter:blur(4px);opacity:.95';
+  hud.style.cssText = 'position:fixed;top:150px;right:6px;z-index:26;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 9px;font:11px sans-serif;color:#fff;min-width:170px;backdrop-filter:blur(4px);opacity:.95;pointer-events:none';
   hud.innerHTML = `
     <div style="font-weight:700;color:#c8a0ff;margin-bottom:4px;font-size:10px;letter-spacing:1px">🧠 IA TÁCTICA</div>
     <div style="display:flex;justify-content:space-between"><span>Escuadrones aliados:</span><b id="ai-sq-ally">0</b></div>
