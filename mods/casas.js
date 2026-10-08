@@ -1,5 +1,5 @@
 /* ============================================================
-   MOD: Casas Destructibles v2.0
+   MOD: Casas Destructibles v3.0 (optimizado + manzanas ordenadas)
    - 6 tipos de edificio: casa baja, casa familiar, apartamentos,
      tienda, almacén y oficinas con fachada de vidrio
    - Las paredes son piezas: cada pieza se rompe por separado
@@ -7,7 +7,10 @@
    - Grietas al dañarse, polvo, escombros con gravedad y rebote
    - Colapso por pisos: el piso de arriba cae sobre el de abajo
    - Fuego y humo en las ruinas; blast() para explosiones
-   Requiere: IronfrontAPI (y mejora_mundo.js para WorldData, opcional)
+   Requiere: IronfrontAPI (mejora_mundo.js para WorldData, opcional)
+   Exporta: CasasSystem.{buildings, blast, clearAll, buildLots, layoutDefault}
+   Si localStorage.ironfront_mapa === 'ciudad', no pone el pueblo por defecto:
+   lo hace mapa_ciudad.js.
    ============================================================ */
 (function () {
   if (window.__CASAS_LOADED) { console.warn('Casas ya cargadas'); return; }
@@ -22,11 +25,11 @@
   const GRAV = 16;
   const CFG = {
     cell: 3.0, fh: 4, wallHp: 260, glassHp: 70,
-    maxDebris: 160, maxFx: 110, maxBuildings: 26,
+    maxDebris: 90, maxFx: 60, maxBuildings: 26,
     breakSoundGap: 0.12,
   };
 
-  console.log('Mod Casas Destructibles v2.0: iniciando...');
+  console.log('Mod Casas Destructibles v3.0: iniciando...');
 
   const buildings = [];
   let T_NOW = 0, shakeAmount = 0, lastBreakSnd = -1;
@@ -145,7 +148,9 @@
   }
 
   // ===================== OCULTAR CASAS BASE =====================
+  let baseHidden = false;
   function hideBaseHouses() {
+    if (baseHidden) return; baseHidden = true;
     let hidden = 0;
     API.scene.traverse(obj => {
       if (obj.isInstancedMesh && obj.material && obj.material.color) {
@@ -231,7 +236,7 @@
           const isWin = kind === 'window';
           const mesh = new THREE.Mesh(axisGeo(s.axis, cw, fh, TH), wallMat);
           mesh.position.set(lx, fh / 2, lz);
-          mesh.castShadow = true; mesh.receiveShadow = true;
+          mesh.castShadow = false; mesh.receiveShadow = false;
           fg.add(mesh);
           if (isWin) windowDecor(mesh, s, cw, fh);
 
@@ -506,34 +511,61 @@
     }
   }
 
-  // ===================== REEMPLAZO DE CASAS BASE =====================
-  function replaceBaseHouses() {
-    const hl = world('houseList') || [];
+  // ===================== LIMPIEZA Y COLOCACIÓN =====================
+  function clearAll() {
+    for (const b of buildings) {
+      API.scene.remove(b.g);
+      for (const c of b.chunks) {
+        if (c.coll) { c.coll.min.set(FAR, 0, FAR); c.coll.max.set(FAR, 0, FAR); }
+      }
+      disableBuilding(b);
+    }
+    buildings.length = 0;
+    console.log('Casas: todas retiradas');
+  }
+
+  // Lotes: cuadrícula de manzanas a los lados de las calles (x=0 y z=0), lejos del río y del centro
+  const LOT_X = [-117, -91, -65, -39, -13, 13, 39, 65, 91, 117];
+  const LOT_Z = [-117, -91, -65, -39, -13, 13, 91, 117];
+  function mulberry(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t2 = Math.imul(a ^ a >>> 15, 1 | a); t2 = t2 + Math.imul(t2 ^ t2 >>> 7, 61 | t2) ^ t2; return ((t2 ^ t2 >>> 14) >>> 0) / 4294967296; }; }
+  function lotIsFree(x, z) {
+    if (z > RIVER.zMin - 8 && z < RIVER.zMax + 8) return false;   // río y puentes
+    if (Math.hypot(x, z) < 30) return false;                      // zona de captura
+    return true;
+  }
+  // mode: 'pueblo' (cerca de 60% ocupado, tipos mixtos) | 'ciudad' (casi todo ocupado, más altos)
+  function layoutLots(mode, seed) {
+    const rnd01 = mulberry(seed || 7), out = [];
+    for (const x of LOT_X) for (const z of LOT_Z) {
+      if (!lotIsFree(x, z)) continue;
+      const far = Math.max(Math.abs(x), Math.abs(z)) >= 100;
+      if (mode === 'ciudad') {
+        if (rnd01() < 0.1) continue;
+        const pool = far ? [0, 1, 4] : [2, 2, 5, 3, 1];
+        out.push({ x, z, type: pool[Math.floor(rnd01() * pool.length)] });
+      } else {
+        if (rnd01() < 0.4) continue;
+        const pool = far ? [0, 1, 4, 0] : [1, 2, 3, 5, 0];
+        out.push({ x, z, type: pool[Math.floor(rnd01() * pool.length)] });
+      }
+    }
+    return out.slice(0, CFG.maxBuildings);
+  }
+  function buildLots(list) {
+    let n = 0;
+    for (const L of list) { if (buildings.length >= CFG.maxBuildings) break; buildHouse(L.x, L.z, L.type, n++); }
+    console.log(`Casas: ${buildings.length} edificios colocados`);
+    return buildings.length;
+  }
+  function layoutDefault() {
+    hideBaseHouses();
     const base = [];
+    const hl = world('houseList') || [];
     for (const h of hl) if (h && h.x !== undefined) base.push({ x: h.x, z: h.z });
     pruneNear(world('houses'), base, 9);
     pruneNear(world('coverObjs'), base, 9);
     if (Array.isArray(hl)) hl.length = 0;
-
-    const SEQ = [0, 1, 2, 3, 1, 5, 0, 4, 2, 5, 3, 1, 0, 2];
-    let count = 0;
-    base.forEach((p, i) => {
-      if (count >= CFG.maxBuildings) return;
-      if (p.z >= RIVER.zMin - 3 && p.z <= RIVER.zMax + 3) return;
-      if (Math.abs(p.x) > 128) return;
-      buildHouse(p.x, p.z, SEQ[i % SEQ.length], i); count++;
-    });
-    const extras = [[-45, 20], [45, 20], [-45, -20], [45, -20], [-90, -170], [90, 170],
-      [-160, -80], [160, -80], [-160, 80], [160, 80], [-30, -240], [30, -240], [-30, 240], [30, 240],
-      [-70, -140], [70, -140], [-70, 140], [70, 140], [-110, 0], [110, 0]];
-    extras.forEach(([bx, bz], i) => {
-      if (count >= CFG.maxBuildings) return;
-      if (Math.abs(bx) > 128) return;
-      if (bz >= RIVER.zMin - 3 && bz <= RIVER.zMax + 3) return;
-      if (buildings.some(h => Math.hypot(bx - h.x, bz - h.z) < 14)) return;
-      buildHouse(bx, bz, SEQ[(i + 3) % SEQ.length], i + 50); count++;
-    });
-    console.log(`${buildings.length} edificios destructibles colocados`);
+    return buildLots(layoutLots('pueblo', 7));
   }
 
   function applyShake(dt) {
@@ -546,10 +578,11 @@
   }
 
   // ===================== INICIALIZAR =====================
+  let mapaCiudad = false;
+  try { mapaCiudad = localStorage.getItem('ironfront_mapa') === 'ciudad'; } catch (e) {}
   setTimeout(() => {
-    hideBaseHouses();
-    replaceBaseHouses();
     installOverrides();
+    if (!mapaCiudad) layoutDefault();
   }, 150);
 
   const prevOnUpdate = API.onUpdate;
@@ -565,6 +598,6 @@
     applyShake(dt);
   };
 
-  window.CasasSystem = { version: '2.0', buildings, blast, addCracks: undefined };
-  console.log('Mod Casas Destructibles v2.0 listo.');
+  window.CasasSystem = { version: '3.0', buildings, blast, clearAll, buildLots, layoutLots, layoutDefault, hideBaseHouses };
+  console.log('Mod Casas Destructibles v3.0 listo.');
 })();
