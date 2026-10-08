@@ -83,20 +83,38 @@
       }
     }
   }
-  // Piso de cerámica en todo el terreno (sin pasto), calles ocultas
-  function pisoCeramica() {
+  // Piso de cemento gris (menos brillante) y calles de asfalto con línea central
+  const CALLES = [-104, -78, -52, -26, 0, 26, 52, 78, 104];   // centros de las calles (lotes en medio)
+  function pisoCemento() {
     const cv = document.createElement('canvas'); cv.width = 128; cv.height = 128;
     const cx = cv.getContext('2d');
-    cx.fillStyle = '#e9e4da'; cx.fillRect(0, 0, 128, 128);
-    cx.fillStyle = '#ded8cb'; cx.fillRect(8, 8, 48, 48); cx.fillRect(72, 72, 48, 48);
-    cx.strokeStyle = '#b3ab9d'; cx.lineWidth = 3; cx.strokeRect(1.5, 1.5, 125, 125);
+    cx.fillStyle = '#9d9d9a'; cx.fillRect(0, 0, 128, 128);
+    cx.fillStyle = '#8f8f8c'; cx.fillRect(4, 4, 56, 56); cx.fillRect(68, 68, 56, 56);
+    cx.strokeStyle = '#7a7a77'; cx.lineWidth = 2; cx.strokeRect(1, 1, 126, 126);
     const tex = new THREE.CanvasTexture(cv);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(100, 100);   // baldosa de 4 m sobre 400 m
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(100, 100);
     API.scene.traverse(o => {
-      if (o.name === 'ground' && o.material) o.material = new THREE.MeshLambertMaterial({ map: tex });
+      if (o.name === 'ground' && o.material) {
+        o.material = new THREE.MeshLambertMaterial({ map: tex, color: 0xd0d0d0 });  // tono gris, sin brillo
+      }
       const p = o.geometry && o.geometry.parameters;
-      if (p && p.width === 12 && (p.height === 400 || p.height === 325)) o.visible = false;   // calles de tierra
+      if (p && p.width === 12 && (p.height === 400 || p.height === 325)) o.visible = false;   // calles viejas
     });
+    // Calles nuevas: asfalto oscuro + línea central blanca discontinua
+    const asfalto = new THREE.MeshLambertMaterial({ color: 0x3a3a3a });
+    const linea = new THREE.MeshLambertMaterial({ color: 0xf2f2f0 });
+    const pieza = (w, h, x, z, m, nombre) => {
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m);
+      g.rotation.x = -Math.PI / 2; g.position.set(x, 0.04, z); g.name = nombre; API.scene.add(g); return g;
+    };
+    for (const c of CALLES) {
+      pieza(12, 400, c, 0, asfalto, 'calle');          // calle norte-sur
+      pieza(400, 12, 0, c, asfalto, 'calle');          // calle este-oeste
+      for (let s = -190; s <= 190; s += 24) {          // línea central discontinua (espaciada, menos piezas)
+        pieza(0.5, 4, c, s, linea, 'linea');
+        pieza(4, 0.5, s, c, linea, 'linea');
+      }
+    }
   }
   // Árboles de mejora_mundo: se quitan de la escena y de la lista
   function quitarArbolesMejora() {
@@ -147,7 +165,7 @@
     // 3) Escenario: solo edificios
     ocultarVerdes();
     quitarArbolesMejora();
-    pisoCeramica();
+    pisoCemento();
     ocultarAeropuertos();
     quitarAviones();
     const btnA = document.getElementById('btn-airstrike');

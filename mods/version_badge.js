@@ -14,7 +14,7 @@
     let piso = '';
     if (A && A.scene) {
       let g = null; A.scene.traverse(o => { if (o.name === 'ground') g = o; });
-      piso = g ? (g.material && g.material.map ? 'piso: ceramica' : 'piso: pasto') : 'piso: ?';
+      piso = g ? (g.material && g.material.map ? 'piso: cemento' : 'piso: pasto') : 'piso: ?';
     }
     b.textContent = [cas, mapa, mm, piso, 'modo: ' + (localStorage.getItem('ironfront_mapa') || 'normal')].join('\n');
   }

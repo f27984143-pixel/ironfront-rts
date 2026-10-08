@@ -597,7 +597,7 @@
       if (!lotIsFree(x, z)) continue;
       const far = Math.max(Math.abs(x), Math.abs(z)) >= 100;
       if (mode === 'ciudad') {
-        if (rnd01() < 0.1) continue;
+        if (rnd01() < 0.02) continue;   // ciudad casi llena
         const pool = far ? [0, 1, 4] : [2, 2, 5, 3, 1];
         out.push({ x, z, type: pool[Math.floor(rnd01() * pool.length)] });
       } else {
