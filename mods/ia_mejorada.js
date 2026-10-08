@@ -24,6 +24,9 @@
   // ======================== CONFIG ========================
   const CFG = {
     squadSize: 5,
+    coverRange: 42,      // radio para buscar cobertura alrededor del escuadrón
+    coverMinEnemy: 12,   // no buscar cobertura pegada al enemigo
+    coverMaxEnemy: 60,
     reevalEvery: 0.6,
     soloDist: 22,
     huidaHP: 0.35,
@@ -48,6 +51,8 @@
       <span>Huyendo:</span><b id="ai-fleeing" style="color:#ffb060">0</b>
     </div>
     <div style="display:flex;justify-content:space-between"><span>Flanqueando:</span><b id="ai-flank" style="color:#60d0ff">0</b></div>
+    <div style="display:flex;justify-content:space-between"><span>Puntos de cobertura:</span><b id="ai-cover-pts" style="color:#9ef">0</b></div>
+    <div style="display:flex;justify-content:space-between"><span>En cobertura:</span><b id="ai-cover" style="color:#7dffb0">0</b></div>
     <div style="display:flex;justify-content:space-between"><span>Artillería viva:</span><b id="ai-arty" style="color:#ff6b6b">0</b></div>
   `;
   document.body.appendChild(hud);
@@ -255,6 +260,50 @@
     if (API.directControlActive && API.directControlActive() && API.directControlUnit && API.directControlUnit() === u) return true;
     return false;
   }
+
+  // ======================== ESCANEO DE COBERTURA ========================
+  // Busca puntos libres pegados a obstáculos (casas, árboles) y los guarda cada 3 s
+  let coverPts = [], coverT = -99;
+  function escanearCobertura(now) {
+    if (now - coverT < 3000) return coverPts;
+    coverT = now; coverPts = [];
+    const cajas = (typeof houses !== 'undefined' && Array.isArray(houses)) ? houses : [];
+    for (const h of cajas) {
+      if (!h || !h.min || h.min.x > 9000) continue;          // colisionadores desactivados
+      const x0 = h.min.x, x1 = h.max.x, z0 = h.min.z, z1 = h.max.z;
+      if (x1 - x0 > 14 || z1 - z0 > 14) continue;            // solo obstáculos pequeños
+      const zm = (z0 + z1) / 2, xm = (x0 + x1) / 2, m = 1.1;
+      const cand = [[x0 - m, zm], [x1 + m, zm], [xm, z0 - m], [xm, z1 + m]];
+      for (const [x, z] of cand) {
+        if (typeof isColliding === 'function' && isColliding({ x, y: 1, z }, 0.8)) continue;
+        coverPts.push({ x, z });
+      }
+    }
+    return coverPts;
+  }
+  // Punto de cobertura para una unidad: detrás de un obstáculo respecto al enemigo, cerca del escuadrón
+  function buscarCobertura(c, ep, usados, now) {
+    let mejor = null, mejorD = 1e9;
+    for (const p of escanearCobertura(now)) {
+      const dc = dist2D(p, c);
+      if (dc > CFG.coverRange) continue;
+      const de = dist2D(p, ep);
+      if (de < CFG.coverMinEnemy || de > CFG.coverMaxEnemy) continue;
+      if (typeof losClear === 'function' && losClear(p, ep)) continue;   // sin obstáculo entre medio: no sirve
+      if (usados.some(q => dist2D(p, q) < 2.5)) continue;
+      if (dc < mejorD) { mejorD = dc; mejor = p; }
+    }
+    return mejor;
+  }
+  // Cada unidad mantiene su punto de cobertura hasta llegar o hasta que el enemigo se aleje
+  function resolverCobertura(u, st, ep, c, usados, now) {
+    if (st.coverPt && dist2D(st.coverPt, ep) > CFG.coverMaxEnemy + 15) st.coverPt = null;
+    if (!st.coverPt) st.coverPt = buscarCobertura(c, ep, usados, now);
+    if (!st.coverPt) return null;
+    usados.push(st.coverPt);
+    return st.coverPt;
+  }
+
   function asignarObjetivosEscuadron(sq, enemigos) {
     if (!enemigos.length) return;
     // Centroide
@@ -272,12 +321,26 @@
     }
     if (!best) return;
 
+    const usadosCob = [];
     sq.units.forEach(u => {
       if (!unidadEnemigaViva(u) || esJugador(u)) return;
       const st = getState(u);
       const mp = u.mesh.position;
       const ep = best.mesh.position;
       u.enemy = best;
+
+      // Asalto: primero buscar cobertura detrás de un obstáculo; si no hay, atacar directo
+      if (st.role === 'assault') {
+        const cp = resolverCobertura(u, st, ep, c, usadosCob, performance.now());
+        if (cp) {
+          const enCob = dist2D(mp, cp) < 2;
+          st.inCover = enCob;
+          if (enCob) u.target.set(mp.x, 1, mp.z); else u.target.set(cp.x, 1, cp.z);
+          u.manualTarget = true;
+          return;
+        }
+        st.inCover = false;
+      }
 
       if (st.role === 'flank') {
         const dx = ep.x - mp.x, dz = ep.z - mp.z;
@@ -582,6 +645,9 @@
     $('ai-fleeing').textContent  = huyendo;
     $('ai-flank').textContent    = flanqueando;
     $('ai-arty').textContent     = artyVivos;
+    let enCob = 0; for (const sq of escuadrones) for (const u of sq.units) { if (unidadEnemigaViva(u) && state.get(u) && state.get(u).inCover) enCob++; }
+    $('ai-cover').textContent    = enCob;
+    $('ai-cover-pts').textContent = coverPts.length;
   }
 
   // ======================== HOOK ========================

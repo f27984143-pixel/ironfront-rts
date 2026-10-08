@@ -24,6 +24,18 @@
     return false;
   }
 
+  // Quita la caja de colisión de un árbol (alto 7, ancho 1.8) en esa posición
+  function quitarCaja(x, z) {
+    const hs = (typeof houses !== 'undefined' && Array.isArray(houses)) ? houses : null;
+    if (!hs) return;
+    for (const h of hs) {
+      if (!h || !h.min || h.min.x > 9000) continue;
+      const cx = (h.min.x + h.max.x) / 2, cz = (h.min.z + h.max.z) / 2;
+      if (Math.abs(cx - x) < 0.3 && Math.abs(cz - z) < 0.3 && Math.abs((h.max.x - h.min.x) - 1.8) < 1e-3) {
+        h.min.set(99999, 0, 99999); h.max.set(99999, 0, 99999);
+      }
+    }
+  }
   const COLORES_ARBOL = [0x594630, 0x2f5f33];
   const CERO = new THREE.Matrix4().makeScale(0, 0, 0);
   const tmp = new THREE.Matrix4();
@@ -36,7 +48,7 @@
       for (let i = 0; i < o.count; i++) {
         o.getMatrixAt(i, tmp);
         const e = tmp.elements;
-        if (enAgua(e[12], e[14])) { o.setMatrixAt(i, CERO); quitados++; }
+        if (enAgua(e[12], e[14])) { o.setMatrixAt(i, CERO); quitarCaja(e[12], e[14]); quitados++; }
       }
       o.instanceMatrix.needsUpdate = true;
     });

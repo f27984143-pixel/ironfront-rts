@@ -49,7 +49,21 @@
     arr.length = 0;
   }
 
+  // Cajas de colisión de árboles base (alto 7, ancho 1.8): si el árbol se oculta, la caja debe desaparecer
+  function quitarCajasArbol() {
+    const hs = (typeof houses !== 'undefined' && Array.isArray(houses)) ? houses : null;
+    if (!hs) return 0;
+    let n = 0;
+    for (const h of hs) {
+      if (!h || !h.min) continue;
+      if (Math.abs(h.max.y - 7) < 1e-6 && Math.abs((h.max.x - h.min.x) - 1.8) < 1e-3 && h.min.x < 9000) {
+        h.min.set(99999, 0, 99999); h.max.set(99999, 0, 99999); n++;
+      }
+    }
+    return n;
+  }
   function ocultarVerdes() {
+    quitarCajasArbol();
     // Árboles de la base (cilindros y conos) y mar/arena
     const COLORES = [0x594630, 0x2f5f33];
     API.scene.traverse(o => {
