@@ -24,9 +24,9 @@
   // ======================== CONFIG ========================
   const CFG = {
     squadSize: 5,
-    coverRange: 42,      // radio para buscar cobertura alrededor del escuadrón
-    coverMinEnemy: 12,   // no buscar cobertura pegada al enemigo
-    coverMaxEnemy: 60,
+    coverRange: 55,      // radio para buscar cobertura alrededor del escuadrón
+    coverMinEnemy: 6,    // no buscar cobertura pegada al enemigo
+    coverMaxEnemy: 70,
     reevalEvery: 0.6,
     soloDist: 22,
     huidaHP: 0.35,

@@ -56,7 +56,10 @@
   const matCache = {};
   function M(hex) { return matCache[hex] || (matCache[hex] = new THREE.MeshLambertMaterial({ color: hex })); }
   const MAT_GLASS = new THREE.MeshLambertMaterial({ color: 0x7fb6d9, transparent: true, opacity: 0.55, depthWrite: false, emissive: 0x0d2233 });
-  const MAT_DOOR = M(0x3a2a1a), MAT_CRACK = M(0x161616), MAT_ROOF = M(0x7a3a2a), MAT_SLAB = M(0x8a8478);
+  const MAT_DOOR = M(0x3a2a1a), MAT_CRACK = M(0x161616);
+  // Techos y losas semitransparentes: así se ve la infantería que está dentro
+  const MAT_ROOF = new THREE.MeshLambertMaterial({ color: 0x7a3a2a, transparent: true, opacity: 0.5, depthWrite: false });
+  const MAT_SLAB = new THREE.MeshLambertMaterial({ color: 0x8a8478, transparent: true, opacity: 0.5, depthWrite: false });
   const MAT_METAL = M(0x4a5056), MAT_AWN_A = M(0xc8402c), MAT_AWN_B = M(0xf2efe6), MAT_SIGN = M(0x7a1f1f);
   const MAT_AC = M(0x9aa0a6), MAT_RAIL = M(0x555555), MAT_COL = M(0xeeeae0);
   const geoCache = {};
@@ -299,8 +302,10 @@
     const hl = world('houseList');
     if (Array.isArray(hl)) {
       const slots = [];
-      const offs = [[-3, -3.8], [3, -3.8], [-3.8, -3], [-3.8, 3], [3.8, -3], [3.8, 3], [-4, 3.8], [4, 3.8]];
-      for (const o of offs) slots.push({ x: x + o[0], z: z + o[1], hx: x, hz: z, occ: null });
+      // Puntos FUERA de la casa (detrás de las paredes), según su tamaño real
+      const hw = W / 2 + 1.6, hd = D / 2 + 1.6;
+      const offs = [[-hw, hd], [hw, hd], [-hw, -hd], [hw, -hd], [-hw, 0], [hw, 0], [0, -hd], [0, hd]];
+      for (const o of offs) slots.push({ x: x + o[0], z: z + o[1], hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null });
       hl.push({ x, z, slots });
     }
     const co = world('coverObjs');
