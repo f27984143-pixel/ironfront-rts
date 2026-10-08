@@ -47,7 +47,7 @@
     font:700 12px sans-serif;padding:5px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.15);pointer-events:none;text-align:center;white-space:nowrap}
   .mj-hud .bar{width:150px;height:5px;background:#374151;border-radius:3px;margin-top:4px;overflow:hidden}
   .mj-hud .bar i{display:block;height:100%;background:linear-gradient(90deg,#f87171,#4ade80);transition:width .3s}
-  .mj-btn{position:fixed;right:8px;bottom:8px;z-index:40;background:#1f2937cc;color:#fff;border:1px solid #6b7280;border-radius:8px;padding:6px 10px;font:700 11px sans-serif;cursor:pointer;touch-action:manipulation}
+  .mj-btn{position:fixed;left:8px;top:66px;z-index:40;background:#1f2937cc;color:#fff;border:1px solid #6b7280;border-radius:8px;padding:6px 10px;font:700 11px sans-serif;cursor:pointer;touch-action:manipulation}
   `;
   document.head.appendChild(st);
 

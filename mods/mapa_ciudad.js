@@ -60,14 +60,23 @@
   }
 
   function ocultarAeropuertos() {
-    // Aviones y helis parqueados en los aeropuertos (mejora_mundo): cerca de (±60, ±200)
+    // Aeropuertos de mejora_mundo (pistas, hangares, aviones parqueados): cerca de (±60, ±200)
     const puntos = [[-60, -200], [60, 200]];
     for (const ch of [...API.scene.children]) {
-      if (!ch.isGroup && !(ch.type === 'Group')) continue;
-      if (ch.position.y > 40) continue;
+      if (ch.position.y > 60) continue;
       for (const p of puntos) {
-        if (Math.hypot(ch.position.x - p[0], ch.position.z - p[1]) < 45) ch.visible = false;
+        if (Math.hypot(ch.position.x - p[0], ch.position.z - p[1]) < 75) ch.visible = false;
       }
+    }
+  }
+  function quitarAviones() {
+    // Aviones y helicópteros de mejora_mundo (listas expuestas en window.MejoraMundo)
+    const mm = window.MejoraMundo;
+    if (!mm) return;
+    for (const lista of [mm.planes, mm.helis]) {
+      if (!Array.isArray(lista)) continue;
+      for (const u of lista) if (u && u.mesh) API.scene.remove(u.mesh);
+      lista.length = 0;
     }
   }
 
@@ -100,6 +109,7 @@
     // 3) Escenario: solo edificios
     ocultarVerdes();
     ocultarAeropuertos();
+    quitarAviones();
     const btnA = document.getElementById('btn-airstrike');
     if (btnA) btnA.style.display = 'none';            // sin ataque aéreo
     const btnD = document.getElementById('btn-direct-control');
