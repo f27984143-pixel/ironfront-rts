@@ -332,24 +332,11 @@ function createEnvironment() {
   const W=[],RF=[],RF2=[],WIN=[],DOOR=[],TR=[],CR=[], hpos=[];
   const addMove=(cx0,cz0,x0,x1,z0,z1)=>houses.push({ pos:null, min:new THREE.Vector3(cx0+x0,0,cz0+z0), max:new THREE.Vector3(cx0+x1,7.4,cz0+z1) });
   const addB=(cx0,cz0,x0,x1,z0,z1)=>bwalls.push({x0:cx0+x0,x1:cx0+x1,z0:cz0+z0,z1:cz0+z1});
-  for(let n=0,tries=0;n<14&&tries<600;tries++){
-    const px=(Math.random()-0.5)*220, pz=(Math.random()-0.5)*130;
-    if(Math.abs(px)<14||Math.abs(pz)<14||Math.hypot(px,pz)<30||Math.abs(px)>120) continue;
-    if(hpos.some(h=>Math.hypot(h[0]-px,h[1]-pz)<24)) continue;
-    hpos.push([px,pz]); n++;
-    W.push([px,3.5,pz-5.5,12,7,1],[px-5.5,3.5,pz,1,7,12],[px+5.5,3.5,pz,1,7,12],[px-4,3.5,pz+5.5,4,7,1],[px+4,3.5,pz+5.5,4,7,1],[px,6,pz+5.5,4,2,1]);
-    RF.push([px,7.4,pz,13.6,0.8,13.6]); RF2.push([px,8.5,pz,9,1.4,9]); DOOR.push([px,2.5,pz+5.5]);
-    for(const w of [[-3,-5.5,0],[3,-5.5,0],[-4,5.5,0],[4,5.5,0],[-5.5,-3,1],[-5.5,3,1],[5.5,-3,1],[5.5,3,1]]) WIN.push([px+w[0],1.7,pz+w[1],w[2]]);
-    addMove(px,pz,-6,6,-6,-5); addMove(px,pz,-6,-2,5,6); addMove(px,pz,2,6,5,6); addMove(px,pz,-6,-5,-5,5); addMove(px,pz,5,6,-5,5);
-    for(const s of [[-6,-3.9],[-2.1,2.1],[3.9,6]]) addB(px,pz,s[0],s[1],-6,-5);
-    for(const s of [[-6,-4.9],[-3.1,-2],[2,3.1],[4.9,6]]) addB(px,pz,s[0],s[1],5,6);
-    for(const s of [[-5,-3.9],[-2.1,2.1],[3.9,5]]){ addB(px,pz,-6,-5,s[0],s[1]); addB(px,pz,5,6,s[0],s[1]); }
-    const slots=[]; for(const s of [[-3,-3.8],[3,-3.8],[-3.8,-3],[-3.8,3],[3.8,-3],[3.8,3],[-4,3.8],[4,3.8]]) slots.push({x:px+s[0],z:pz+s[1],hx:px,hz:pz,occ:null});
-    houseList.push({x:px,z:pz,slots:slots}); coverObjs.push({x:px,z:pz,r:7});
-  }
   const tpos=[];
   for(let n=0,tries=0;n<70&&tries<900;tries++){
     const x=(Math.random()-0.5)*250, z=(Math.random()-0.5)*150;
+    if(Math.abs(x)>=125) continue;
+    if(z>36&&z<74) continue;   // no en el río
     if(Math.abs(x)<9||Math.abs(z)<9||Math.hypot(x,z)<22||hpos.some(h=>Math.abs(h[0]-x)<10&&Math.abs(h[1]-z)<10)||tpos.some(q=>Math.hypot(q[0]-x,q[1]-z)<5)) continue;
     tpos.push([x,z]); n++; TR.push([x,1.7,z,0.9,3.4,0.9]); CR.push([x,5.4,z,5,6,5]);
     houses.push({pos:null,min:new THREE.Vector3(x-0.9,0,z-0.9),max:new THREE.Vector3(x+0.9,7,z+0.9)}); bwalls.push({x0:x-0.8,x1:x+0.8,z0:z-0.8,z1:z+0.8}); coverObjs.push({x:x,z:z,r:1.2});
@@ -358,11 +345,6 @@ function createEnvironment() {
   const mk=(geo,mat,list,shadow,rot)=>{ const m=new THREE.InstancedMesh(geo,mat,Math.max(1,list.length)); m.frustumCulled=false; m.castShadow=shadow; m.receiveShadow=shadow;
   list.forEach((v,i)=>{ D.position.set(v[0],v[1],v[2]); D.scale.set(v[3]||1,v[4]||1,v[5]||1); D.rotation.set(0,rot?(v[3]*0)+v[4]*0:0,0); D.updateMatrix(); m.setMatrixAt(i,D.matrix); }); m.instanceMatrix.needsUpdate=true; scene.add(m); return m; };
   const box=new THREE.BoxGeometry(1,1,1);
-  mk(box,new THREE.MeshLambertMaterial({color:0xd8d2c4}),W,true);
-  mk(box,new THREE.MeshLambertMaterial({color:0x883333}),RF,true);
-  mk(box,new THREE.MeshLambertMaterial({color:0x6a2626}),RF2,true);
-  mk(box,new THREE.MeshLambertMaterial({color:0x5a3a1e}),DOOR.map(d=>[d[0]-1.9,d[1],d[2]+1.3,0.25,5,2.2]),false);
-  const wm=new THREE.InstancedMesh(box,new THREE.MeshLambertMaterial({color:0x2d4a66,emissive:0x0a1a28}),Math.max(1,WIN.length)); wm.frustumCulled=false;
   WIN.forEach((v,i)=>{ D.position.set(v[0],v[1],v[2]); D.scale.set(v[3]?1.4:1.8,2.6,v[3]?1.8:1.4); D.rotation.set(0,0,0); D.updateMatrix(); wm.setMatrixAt(i,D.matrix); }); wm.instanceMatrix.needsUpdate=true; scene.add(wm);
   mk(new THREE.CylinderGeometry(0.4,0.5,1,6),new THREE.MeshLambertMaterial({color:0x594630}),TR,true);
   mk(new THREE.ConeGeometry(0.5,1,7),new THREE.MeshLambertMaterial({color:0x2f5f33}),CR,true);
@@ -372,7 +354,7 @@ function createEnvironment() {
 function isColliding(pos, radius) { if(pos.x+radius>SHORE) return true; for(let i=0;i<houses.length;i++){ const h=houses[i]; if(pos.x+radius>h.min.x && pos.x-radius<h.max.x && pos.z+radius>h.min.z && pos.z-radius<h.max.z) return true; } return false; }
 function bulletBlocked(p){ for(let i=0;i<bwalls.length;i++){ const w=bwalls[i]; if(p.x>w.x0&&p.x<w.x1&&p.z>w.z0&&p.z<w.z1) return true; } return false; }
 function losClear(a,b){ const dx=b.x-a.x,dz=b.z-a.z,n=Math.max(2,Math.floor(Math.hypot(dx,dz)/2.5)); for(let i=1;i<n;i++){ _lp.set(a.x+dx*i/n,0,a.z+dz*i/n); if(bulletBlocked(_lp)) return false; } return true; }
-function tryMove(u,np){ const p=u.mesh.position,r=u.radius||1; if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
+function tryMove(u,np){ const p=u.mesh.position,r=u.radius||1; if(isColliding(p,r)){ p.copy(np); return; } if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
 function releaseSlot(u){ if(u.slot){ if(u.slot.occ===u) u.slot.occ=null; u.slot=null; } }
 function exitPath(s){ return [new THREE.Vector3(s.hx,1,s.hz+2.5),new THREE.Vector3(s.hx,1,s.hz+8.5),new THREE.Vector3(s.hx+9.5,1,s.hz+9.5)]; }
 function enterPath(p,hx,hz){ const pts=[]; if(p.z<hz+9){ const sx=p.x>=hx?1:-1; if(Math.abs(p.x-hx)<9.5) pts.push(new THREE.Vector3(hx+sx*9.5,1,p.z)); pts.push(new THREE.Vector3(hx+sx*9.5,1,hz+9.5)); } pts.push(new THREE.Vector3(hx,1,hz+8.5),new THREE.Vector3(hx,1,hz+2.5)); return pts; }
