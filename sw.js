@@ -3,13 +3,16 @@
    - Mods y HTML: network-first (se actualizan solos con internet)
    - CDNs y estáticos: cache-first (rápido y offline)
    ============================================================ */
-const CACHE = 'ironfront-v3';
+const CACHE = 'ironfront-v4';   // subir número cada vez que cambie el SW
 
 const PRECACHE = [
   './',
   './index.html',
   './game.js',
   './manifest.json',
+  './mods/modos_juego.js',
+  './mods/mapa_ciudad.js',
+  './mods/mods_fix.js',
   './icon.svg',
   './mods/mods.json',
   './mods/pwa_offline.js',
@@ -25,6 +28,8 @@ const NETWORK_FIRST = [
   /mods\/.*\.(js|json)$/i,
   /modificaciones\/.*\.(js|json)$/i,   // compatibilidad si algún día vuelve el nombre
   /\/index\.html$/i,
+  /\/game\.js$/i,                      // el juego principal: siempre la versión nueva
+  /\/manifest\.json$/i,
 ];
 
 self.addEventListener('install', e => {
