@@ -295,6 +295,26 @@
     }
     return mejor;
   }
+  // Punto INTERIOR de una casa cercana: la IA entra por la puerta y se queda dentro protegida
+  function buscarInterior(u, c, ep, usados) {
+    const hl = (typeof houseList !== 'undefined' && Array.isArray(houseList)) ? houseList : [];
+    let mejor = null, mejorD = 1e9;
+    for (const h of hl) {
+      if (!h || h.x > 9000 || !h.slots) continue;
+      if (dist2D(h, c) > CFG.coverRange) continue;
+      for (const s of h.slots) {
+        if (!s.inside) continue;
+        if (s.occ && s.occ !== u && s.occ.hp > 0 && !s.occ.isDead) continue;
+        const de = dist2D(s, ep);
+        if (de < 6 || de > CFG.coverMaxEnemy) continue;
+        if (usados.some(q => dist2D(s, q) < 2)) continue;
+        const dc = dist2D(s, c);
+        if (dc < mejorD) { mejorD = dc; mejor = s; }
+      }
+    }
+    if (mejor) mejor.occ = u;
+    return mejor;
+  }
   // Cada unidad mantiene su punto de cobertura hasta llegar o hasta que el enemigo se aleje
   function resolverCobertura(u, st, ep, c, usados, now) {
     if (st.coverPt && dist2D(st.coverPt, ep) > CFG.coverMaxEnemy + 15) st.coverPt = null;
@@ -331,6 +351,14 @@
 
       // Asalto: primero buscar cobertura detrás de un obstáculo; si no hay, atacar directo
       if (st.role === 'assault') {
+        const sl = buscarInterior(u, c, ep, usadosCob);
+        if (sl) {
+          usadosCob.push(sl);
+          st.inCover = dist2D(mp, sl) < 2;
+          if (st.inCover) u.target.set(mp.x, 1, mp.z); else u.target.set(sl.x, 1, sl.z);
+          u.manualTarget = true;
+          return;
+        }
         const cp = resolverCobertura(u, st, ep, c, usadosCob, performance.now());
         if (cp) {
           const enCob = dist2D(mp, cp) < 2;

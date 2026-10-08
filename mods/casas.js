@@ -32,6 +32,7 @@
   console.log('Mod Casas Destructibles v3.0: iniciando...');
 
   const buildings = [];
+  const turrets = [];
   let T_NOW = 0, shakeAmount = 0, lastBreakSnd = -1;
 
   // Lee un global del juego: window.X si existe, si no la variable global
@@ -188,10 +189,17 @@
     return (i % 2 === 1) ? 'window' : 'wall';
   }
 
+  const MAT_FRAME = M(0xe8e4da);
   function windowDecor(mesh, s, cw, fh) {
+    const ox = s.axis === 'x' ? 0 : s.nx * 0.28, oz = s.axis === 'x' ? s.nz * 0.28 : 0;
     const gl = new THREE.Mesh(axisGeo(s.axis, cw * 0.78, fh * 0.42, 0.05), MAT_GLASS);
-    gl.position.set(s.axis === 'x' ? 0 : s.nx * 0.27, 0.1, s.axis === 'x' ? s.nz * 0.27 : 0);
+    gl.position.set(ox * 0.95, 0.1, oz * 0.95);
     mesh.add(gl);
+    // Travesaño central y marco
+    const mull = new THREE.Mesh(axisGeo(s.axis, 0.09, fh * 0.42, 0.07), MAT_FRAME);
+    mull.position.set(ox, 0.1, oz); mesh.add(mull);
+    const sill = new THREE.Mesh(axisGeo(s.axis, cw * 0.9, 0.14, 0.22), MAT_FRAME);
+    sill.position.set(s.axis === 'x' ? 0 : s.nx * 0.36, -fh * 0.3, s.axis === 'x' ? s.nz * 0.36 : 0); mesh.add(sill);
   }
   function doorDecor(fg, T, s, lx, lz, cw, fh) {
     if (T.warehouse) {
@@ -275,6 +283,37 @@
       if (T.ac && f % 2 === 0 && f > 0) box(fg, 1.2, 0.9, 1.0, MAT_AC, W / 2 + 0.6, 0.6, 0);
     }
 
+    // Tabique interior en planta baja con puerta: separa la sala delantera (entrada) de la trasera
+    const g00 = b.groups[0];
+    if (!T.warehouse) {
+      const zt = D / 4, gap = 2.0;
+      for (const [a0, a1] of [[-W / 2 + 0.2, -gap / 2], [gap / 2, W / 2 - 0.2]]) {
+        const L = a1 - a0, cx = (a0 + a1) / 2;
+        const mesh = new THREE.Mesh(G(L, fh, 0.4), wallMat);
+        mesh.position.set(cx, fh / 2, zt); g00.add(mesh);
+        const c = {
+          b, f: 0, s: { n: 'N', axis: 'x', fixed: zt, nx: 0, nz: 1, L: W }, kind: 'wall', mesh,
+          dead: false, hp: CFG.wallHp, maxHp: CFG.wallHp, mat: null, cracks: [], interior: true,
+          box: { x0: cx - L / 2, x1: cx + L / 2, z0: zt - 0.2, z1: zt + 0.2, y0: 0, y1: fh }, coll: null, bw: null,
+        };
+        b.chunks.push(c); b.ground.push(c);
+        const hs = world('houses');
+        c.coll = { pos: null, min: V(x + c.box.x0, 0, z + c.box.z0), max: V(x + c.box.x1, fh, z + c.box.z1) };
+        if (Array.isArray(hs)) hs.push(c.coll);
+      }
+    }
+
+    // Torreta de ametralladora en una ventana de la planta baja (solo si la ventana existe)
+    const ventana = b.chunks.find(c => c.kind === 'window' && c.f === 0 && c.s.n === 'S');
+    if (ventana && Math.random() < 0.6) {
+      const tm = new THREE.Group();
+      tm.position.set(ventana.box.x0 + (ventana.box.x1 - ventana.box.x0) / 2, 1.2, D / 2 - 0.35);
+      box(tm, 0.7, 0.45, 0.8, M(0x3a3f44), 0, 0, 0);
+      box(tm, 0.16, 0.16, 1.3, M(0x1a1a1a), 0, 0.05, 0.9);
+      g00.add(tm);
+      turrets.push({ b, chunk: ventana, mesh: tm, team: b.z < 0 ? 'ally' : 'enemy', cd: rnd(0, 0.5) });
+    }
+
     // Decoración de planta baja
     const g0 = b.groups[0];
     if (T.porch) {
@@ -306,6 +345,11 @@
       const hw = W / 2 + 1.6, hd = D / 2 + 1.6;
       const offs = [[-hw, hd], [hw, hd], [-hw, -hd], [hw, -hd], [-hw, 0], [hw, 0], [0, -hd], [0, hd]];
       for (const o of offs) slots.push({ x: x + o[0], z: z + o[1], hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null });
+      // Puntos INTERIORES: la IA entra por la puerta y se pone en la sala (protegida por las paredes)
+      if (!T.warehouse) {
+        slots.push({ x: x - W / 4, z: z + D / 2 - 1.6, hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null, inside: true });
+        slots.push({ x: x + W / 4, z: z + D / 2 - 1.6, hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null, inside: true });
+      }
       hl.push({ x, z, slots });
     }
     const co = world('coverObjs');
@@ -451,6 +495,7 @@
     for (let i = list.length - 1; i >= 0; i--) {
       const pr = list[i];
       if (!pr || !pr.mesh) continue;
+      if (pr.noBuild) continue;
       const p = pr.mesh.position;
       const sx = pr.prevX !== undefined ? pr.prevX : p.x;
       const sy = pr.prevY !== undefined ? pr.prevY : p.y;
@@ -576,6 +621,32 @@
     return buildLots(layoutLots('pueblo', 7));
   }
 
+  // Torretas: disparan al soldado enemigo más cercano mientras su ventana siga en pie
+  function updateTurrets(dt) {
+    const fire = world('fireProjectile');
+    const sold = API.soldiers || [];
+    for (const t of turrets) {
+      if (t.chunk.dead) { t.mesh.visible = false; continue; }
+      t.cd -= dt;
+      if (t.cd > 0 || typeof fire !== 'function') continue;
+      const P = V(t.b.x + t.mesh.position.x, 1.2, t.b.z + t.mesh.position.z);
+      let best = null, bd = 42;
+      for (const u of sold) {
+        if (!u || u.team === t.team || u.hp <= 0 || u.isDead || u.inHeli || !u.mesh.visible) continue;
+        const d = Math.hypot(u.mesh.position.x - P.x, u.mesh.position.z - P.z);
+        if (d < bd) { bd = d; best = u; }
+      }
+      if (!best) continue;
+      t.mesh.rotation.y = Math.atan2(best.mesh.position.x - P.x, best.mesh.position.z - P.z);
+      const n0 = (API.projectiles || []).length;
+      fire(P, V(best.mesh.position.x, 1, best.mesh.position.z), 0xffe066, 14, t.team);
+      const nuevo = (API.projectiles || [])[n0];
+      if (nuevo) nuevo.noBuild = true;
+      API.playSound && API.playSound('shot');
+      t.cd = 0.45;
+    }
+  }
+
   function applyShake(dt) {
     if (shakeAmount > 0.02) {
       API.camera.position.x += (Math.random() - 0.5) * shakeAmount;
@@ -601,6 +672,7 @@
     T_NOW += dt;
     updateBuildings(dt);
     resolveProjectiles();
+    updateTurrets(dt);
     updateDebris(dt);
     updateFx(dt);
     applyShake(dt);
