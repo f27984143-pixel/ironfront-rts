@@ -355,8 +355,9 @@ function bulletBlocked(p){ for(let i=0;i<bwalls.length;i++){ const w=bwalls[i]; 
 function losClear(a,b){ const dx=b.x-a.x,dz=b.z-a.z,n=Math.max(2,Math.floor(Math.hypot(dx,dz)/2.5)); for(let i=1;i<n;i++){ _lp.set(a.x+dx*i/n,0,a.z+dz*i/n); if(bulletBlocked(_lp)) return false; } return true; }
 function tryMove(u,np){ const p=u.mesh.position,r=u.radius||1; if(!isColliding(np,r)){ p.copy(np); return; } const a=new THREE.Vector3(np.x,p.y,p.z); if(!isColliding(a,r)){ p.copy(a); return; } const b=new THREE.Vector3(p.x,p.y,np.z); if(!isColliding(b,r)) p.copy(b); }
 function releaseSlot(u){ if(u.slot){ if(u.slot.occ===u) u.slot.occ=null; u.slot=null; } }
-function exitPath(s){ return [new THREE.Vector3(s.hx,1,s.hz+2.5),new THREE.Vector3(s.hx,1,s.hz+8.5),new THREE.Vector3(s.hx+9.5,1,s.hz+9.5)]; }
-function enterPath(p,hx,hz){ const pts=[]; if(p.z<hz+9){ const sx=p.x>=hx?1:-1; if(Math.abs(p.x-hx)<9.5) pts.push(new THREE.Vector3(hx+sx*9.5,1,p.z)); pts.push(new THREE.Vector3(hx+sx*9.5,1,hz+9.5)); } pts.push(new THREE.Vector3(hx,1,hz+8.5),new THREE.Vector3(hx,1,hz+2.5)); return pts; }
+function exitPath(s){ const dz=s.dz||6.5, dx=s.dx||6.5; return [new THREE.Vector3(s.hx,1,s.hz+dz+2.5),new THREE.Vector3(s.hx+dx+2,1,s.hz+dz+2.5)]; }
+function enterPath(p,hx,hz,dz,dx){ dz=dz||6.5; dx=dx||6.5; const Dz=hz+dz; const pts0=[]; if(p.z<Dz+2){ const sx=p.x>=hx?1:-1; if(Math.abs(p.x-hx)<dx+2) pts0.push(new THREE.Vector3(hx+sx*(dx+2),1,p.z)); pts0.push(new THREE.Vector3(hx+sx*(dx+2),1,Dz+2.5)); } pts0.push(new THREE.Vector3(hx,1,Dz+2.5), new THREE.Vector3(hx,1,Dz-1)); return pts0; }
+function enterPathOld(p,hx,hz){ const pts=[]; if(p.z<hz+9){ const sx=p.x>=hx?1:-1; if(Math.abs(p.x-hx)<9.5) pts.push(new THREE.Vector3(hx+sx*9.5,1,p.z)); pts.push(new THREE.Vector3(hx+sx*9.5,1,hz+9.5)); } pts.push(new THREE.Vector3(hx,1,hz+8.5),new THREE.Vector3(hx,1,hz+2.5)); return pts; }
 
 function takeCover(u,E,ed){
   const p=u.mesh.position, old=u.slot;
@@ -367,7 +368,7 @@ function takeCover(u,E,ed){
   cand.sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z));
   for(let i=0;i<Math.min(4,cand.length);i++){ const s=cand[i];
   if(Math.hypot(s.x-E.x,s.z-E.z)<58&&losClear(s,E)){
-  let path=[]; if(!(old&&old.hx===s.hx&&old.hz===s.hz)){ if(old) path=exitPath(old); path=path.concat(enterPath(old?path[path.length-1]:p,s.hx,s.hz)); }
+  let path=[]; if(!(old&&old.hx===s.hx&&old.hz===s.hz)){ if(old) path=exitPath(old); path=path.concat(enterPath(old?path[path.length-1]:p,s.hx,s.hz,s.dz,s.dx)); }
   releaseSlot(u); s.occ=u; u.slot=s; u.cover=new THREE.Vector3(s.x,1,s.z); u.path=path; return; } }
   let bc=null,bs=30;
   for(const c of coverObjs){ const d=Math.hypot(c.x-p.x,c.z-p.z), de=Math.hypot(c.x-E.x,c.z-E.z); if(de<8) continue; const sc=d+(de>ed?8:0); if(sc<bs){ bs=sc; bc=c; } }
