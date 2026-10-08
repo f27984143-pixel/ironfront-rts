@@ -3,7 +3,7 @@
    - Mods y HTML: network-first (se actualizan solos con internet)
    - CDNs y estáticos: cache-first (rápido y offline)
    ============================================================ */
-const CACHE = 'ironfront-v5';   // subir número cada vez que cambie el SW
+const CACHE = 'ironfront-v8';   // subir número cada vez que cambie el SW
 
 const PRECACHE = [
   './',
