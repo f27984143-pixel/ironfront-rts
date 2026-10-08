@@ -829,6 +829,7 @@ function handleMapClick(e) {
         if (unit.type === 'soldier' || unit.type === 'tank' || unit.type === 'apc') {
           const tg = unit.target;
           unit.route = findPath(unit.mesh.position.x, unit.mesh.position.z, tg.x, tg.z, unit.radius || 1);
+          unit.lastWp = null;
           if (unit.route.length) { const last = unit.route[unit.route.length - 1]; tg.set(last.x, tg.y, last.z); }
         }
       });
@@ -853,8 +854,18 @@ function findPath(sx, sz, tx, tz, r, maxExp, margen) {
     return memo[k] === 1;
   };
   const si = Math.round((sx - minX) / cs), sj = Math.round((sz - minZ) / cs);
-  const ti = Math.round((tx - minX) / cs), tj = Math.round((tz - minZ) / cs);
-  if (!free(ti, tj)) return [];
+  let ti = Math.round((tx - minX) / cs), tj = Math.round((tz - minZ) / cs);
+  // Si la meta cae dentro de un edificio o árbol, usar la celda libre más cercana (hasta 8 celdas)
+  if (!free(ti, tj)) {
+    let hallada = false;
+    for (let r = 1; r <= 8 && !hallada; r++) {
+      for (let di = -r; di <= r && !hallada; di++) for (let dj = -r; dj <= r && !hallada; dj++) {
+        if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+        if (free(ti + di, tj + dj)) { ti += di; tj += dj; hallada = true; }
+      }
+    }
+    if (!hallada) return [];
+  }
   // Cola de prioridad mínima (montículo binario)
   const heap = []; const push = n => { heap.push(n); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p].f <= heap[i].f) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, rr = l + 1; let m = i; if (l < heap.length && heap[l].f < heap[m].f) m = l; if (rr < heap.length && heap[rr].f < heap[m].f) m = rr; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
@@ -1132,19 +1143,20 @@ function updateAI(delta) {
       }
       if (u.team === 'enemy' && !u.manualTarget && !u.cover && !(u.path&&u.path.length) && !(u.route&&u.route.length) && up.distanceTo(u.target) < (isS?3:6)) u.target.set((Math.random()-0.5)*180, isS?1:0, (Math.random()-0.5)*180);
       // IA: si el destino está lejos, calcular una ruta que rodee edificios (cada 4 s como máximo)
-      if (u.route && u.routeFor && Math.hypot(u.routeFor.x - u.target.x, u.routeFor.z - u.target.z) > 2.5) u.route = null;
+      // Borrar la ruta solo si OTRO sistema cambió el destino (no cuando la propia ruta mueve el objetivo)
+      if (u.route && u.lastWp && Math.hypot(u.target.x - u.lastWp.x, u.target.z - u.lastWp.z) > 0.2) { u.route = null; u.lastWp = null; }
       if (!u.route && !u.playerOrder && !u.cover && up.distanceTo(u.target) > 8) {
         u.routeT = (u.routeT || 0) - delta;
         if (u.routeT <= 0) {
           u.routeT = 4 + Math.random() * 2;
-          const rt = findPath(up.x, up.z, u.target.x, u.target.z, u.radius || 1, 16000, 70);
-          if (rt.length) { u.route = rt; u.routeFor = { x: u.target.x, z: u.target.z }; }
+          const rt = findPath(up.x, up.z, u.target.x, u.target.z, u.radius || 1, 40000, 70);
+          if (rt.length) { u.route = rt; u.routeFor = { x: u.target.x, z: u.target.z }; u.lastWp = null; }
         }
       }
       if (u.route && u.route.length) {
         const w = u.route[0];
         if (Math.hypot(w.x - up.x, w.z - up.z) < 1.0) u.route.shift();
-        if (u.route.length) u.target.set(u.route[0].x, u.target.y, u.route[0].z);
+        if (u.route.length) { u.target.set(u.route[0].x, u.target.y, u.route[0].z); u.lastWp = { x: u.route[0].x, z: u.route[0].z }; }
       }
       const dir = new THREE.Vector3().subVectors(u.target, up);
       if (dir.length() > (isS?0.5:2)) {
