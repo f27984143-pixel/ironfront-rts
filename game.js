@@ -469,7 +469,34 @@ function addSelectionMarker(unit) { const ring = new THREE.Mesh(new THREE.RingGe
 function addHealthBar(unit, yOffset, width) { const hpGroup = new THREE.Group(); const bg = new THREE.Mesh(new THREE.PlaneGeometry(width, 0.2), new THREE.MeshBasicMaterial({color: 0xff0000, depthTest: false})); const fg = new THREE.Mesh(new THREE.PlaneGeometry(width, 0.2), new THREE.MeshBasicMaterial({color: 0x00ff00, depthTest: false})); fg.position.z = 0.01; hpGroup.add(bg); hpGroup.add(fg); hpGroup.renderOrder = 999; scene.add(hpGroup); unit.hpGroup = hpGroup; unit.hpBar = fg; unit.hpYOffset = yOffset; unit.hpWidth = width; }
 
 /* ============ UNIDADES ============ */
-function spawnSoldier(x, z, color, team, role) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: color })); mesh.position.set(x, 1, z); mesh.castShadow = false; scene.add(mesh); { const rk=role==='rocket'; const gm=new THREE.Mesh(rk?new THREE.BoxGeometry(0.35,0.35,1.9):new THREE.BoxGeometry(0.18,0.2,1.3),new THREE.MeshLambertMaterial({color:rk?0x556b2f:0x1a1a1a})); gm.position.set(0.55,rk?0.6:0.2,0.8); mesh.add(gm); } const unit = { type: 'soldier', role: role, weapon: role==='rocket'?4:1, mesh: mesh, team: team, hp: role==='rocket'?120:100, maxHp: role==='rocket'?120:100, target: new THREE.Vector3(x, 1, z), manualTarget: false, cooldown: 0, radius: 0.8, speed: 5.5, basePos: new THREE.Vector3(x, 1, z), respawnTimer: 0 }; mesh.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 1.8, 1.5); soldiers.push(unit); }
+/* ===== SOLDADO EN PIEZAS (casco, cabeza, chaleco del equipo, brazos, piernas, arma) =====
+   El cubo original queda oculto; todas las piezas cuelgan de él, así que la selección,
+   el daño, la barra de vida y la vista en primera persona siguen funcionando igual. */
+const SOL_GEO = {}, SOL_MAT = {};
+function solG(w, h, d) { const k = w + '_' + h + '_' + d; return SOL_GEO[k] || (SOL_GEO[k] = new THREE.BoxGeometry(w, h, d)); }
+function solM(hex) { return SOL_MAT[hex] || (SOL_MAT[hex] = new THREE.MeshLambertMaterial({ color: hex })); }
+function buildSoldierBody(root, color, role) {
+  root.material.visible = false;
+  const add = (w, h, d, hex, x, y, z) => { const m = new THREE.Mesh(solG(w, h, d), solM(hex)); m.position.set(x, y, z); m.castShadow = false; root.add(m); return m; };
+  const SKIN = 0xe0b08c, PANT = 0x2e3440, BOOT = 0x1a1a1a, HELM = 0x2b2b2b;
+  add(0.26, 0.9, 0.28, PANT, -0.17, -0.55, 0);            // piernas
+  add(0.26, 0.9, 0.28, PANT,  0.17, -0.55, 0);
+  add(0.28, 0.15, 0.34, BOOT, -0.17, -0.925, 0.03);       // botas
+  add(0.28, 0.15, 0.34, BOOT,  0.17, -0.925, 0.03);
+  add(0.52, 0.7, 0.3, color, 0, 0.05, 0);                 // torso con chaleco del equipo
+  add(0.18, 0.62, 0.2, color, -0.35, 0.05, 0.02);         // brazos
+  add(0.18, 0.62, 0.2, color,  0.35, 0.05, 0.12);
+  add(0.3, 0.3, 0.3, SKIN, 0, 0.6, 0);                    // cabeza
+  add(0.36, 0.16, 0.36, HELM, 0, 0.76, 0);                // casco
+  if (role === 'rocket') {
+    add(0.22, 0.22, 1.5, 0x556b2f, 0.3, 0.25, 0.6);       // lanzacohetes
+    add(0.3, 0.3, 0.2, 0x333333, 0.3, 0.25, 1.3);
+  } else {
+    add(0.12, 0.14, 0.9, 0x1a1a1a, 0.3, 0.12, 0.5);       // fusil
+    add(0.14, 0.2, 0.26, 0x6b4a2a, 0.3, 0.05, 0.18);      // culata
+  }
+}
+function spawnSoldier(x, z, color, team, role) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: color })); mesh.position.set(x, 1, z); mesh.castShadow = false; scene.add(mesh); buildSoldierBody(mesh, color, role); const unit = { type: 'soldier', role: role, weapon: role==='rocket'?4:1, mesh: mesh, team: team, hp: role==='rocket'?120:100, maxHp: role==='rocket'?120:100, target: new THREE.Vector3(x, 1, z), manualTarget: false, cooldown: 0, radius: 0.8, speed: 5.5, basePos: new THREE.Vector3(x, 1, z), respawnTimer: 0 }; mesh.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 1.8, 1.5); soldiers.push(unit); }
 
 function createAPC(color, team, startX, startZ) { const apcGroup = new THREE.Group(); const bodyMat = new THREE.MeshLambertMaterial({ color: color }); const body = new THREE.Mesh(new THREE.BoxGeometry(3.8, 2, 7.5), bodyMat); body.position.y = 1.2; body.castShadow = true; apcGroup.add(body); const wMat = new THREE.MeshLambertMaterial({ color: 0x111111 }); for(let x=-1; x<=1; x+=2) { for(let z=-2; z<=2; z+=2) { const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.6, 12), wMat); wheel.rotation.z = Math.PI/2; wheel.position.set(x*2, 0.8, z*1.3); wheel.castShadow=true; apcGroup.add(wheel); } } const turret = new THREE.Group(); turret.position.set(0, 2.4, 0); const tMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 2), bodyMat); tMesh.castShadow = true; turret.add(tMesh); const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 8), new THREE.MeshLambertMaterial({ color: 0x333333 })); cannon.rotation.x = Math.PI / 2; cannon.position.set(0, 0, 1.8); cannon.castShadow = true; turret.add(cannon); apcGroup.add(turret); apcGroup.position.set(startX, 0, startZ); scene.add(apcGroup); const unit = { type: 'apc', mesh: apcGroup, turret: turret, bodyMat: bodyMat, originalColor: color, team: team, speed: 10, hp: 350, maxHp: 350, target: new THREE.Vector3(startX, 0, startZ), manualTarget: false, cooldown: 0, isDead: false, radius: 2.5, respawnTimer: 0, basePos: new THREE.Vector3(startX, 0, startZ) }; body.userData = unit; apcGroup.userData = unit; if(team === 'ally') addSelectionMarker(unit); addHealthBar(unit, 3.2, 3.5); vehicles.push(unit); }
 
