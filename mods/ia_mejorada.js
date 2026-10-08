@@ -24,9 +24,9 @@
   // ======================== CONFIG ========================
   const CFG = {
     squadSize: 5,
-    coverRange: 55,      // radio para buscar cobertura alrededor del escuadrón
+    coverRange: 75,      // radio para buscar cobertura / casas alrededor del escuadrón
     coverMinEnemy: 6,    // no buscar cobertura pegada al enemigo
-    coverMaxEnemy: 70,
+    coverMaxEnemy: 95,   // hasta esta distancia del enemigo la IA ya busca entrar a una casa
     reevalEvery: 0.6,
     soloDist: 22,
     huidaHP: 0.35,
@@ -350,7 +350,7 @@
       u.enemy = best;
 
       // Asalto: primero buscar cobertura detrás de un obstáculo; si no hay, atacar directo
-      if (st.role === 'assault') {
+      if (st.role !== 'flank') {   // asalto y apoyo: primero intentan entrar a una casa
         const sl = buscarInterior(u, c, ep, usadosCob);
         if (sl) {
           usadosCob.push(sl);
@@ -359,7 +359,7 @@
           u.manualTarget = true;
           return;
         }
-        const cp = resolverCobertura(u, st, ep, c, usadosCob, performance.now());
+        const cp = st.role === 'assault' ? resolverCobertura(u, st, ep, c, usadosCob, performance.now()) : null;
         if (cp) {
           const enCob = dist2D(mp, cp) < 2;
           st.inCover = enCob;

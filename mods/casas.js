@@ -29,7 +29,7 @@
     breakSoundGap: 0.12,
   };
 
-  console.log('Mod Casas Destructibles v3.0: iniciando...');
+  console.log('Mod Casas Destructibles v4.0 (torretas, interiores): iniciando...');
 
   const buildings = [];
   const turrets = [];
@@ -286,7 +286,7 @@
     // Tabique interior en planta baja con puerta: separa la sala delantera (entrada) de la trasera
     const g00 = b.groups[0];
     if (!T.warehouse) {
-      const zt = D / 4, gap = 2.0;
+      const zt = D / 2 - 3.0, gap = 2.0;   // sala delantera de ~2.5 m de fondo: sitio para entrar y disparar
       for (const [a0, a1] of [[-W / 2 + 0.2, -gap / 2], [gap / 2, W / 2 - 0.2]]) {
         const L = a1 - a0, cx = (a0 + a1) / 2;
         const mesh = new THREE.Mesh(G(L, fh, 0.4), wallMat);
@@ -305,11 +305,14 @@
 
     // Torreta de ametralladora en una ventana de la planta baja (solo si la ventana existe)
     const ventana = b.chunks.find(c => c.kind === 'window' && c.f === 0 && c.s.n === 'S');
-    if (ventana && Math.random() < 0.6) {
+    if (ventana && Math.random() < 0.9) {
+      const teamHex = b.z < 0 ? 0x0055ff : 0xff2222;     // azul = aliado, rojo = enemigo
       const tm = new THREE.Group();
-      tm.position.set(ventana.box.x0 + (ventana.box.x1 - ventana.box.x0) / 2, 1.2, D / 2 - 0.35);
-      box(tm, 0.7, 0.45, 0.8, M(0x3a3f44), 0, 0, 0);
-      box(tm, 0.16, 0.16, 1.3, M(0x1a1a1a), 0, 0.05, 0.9);
+      tm.position.set(ventana.box.x0 + (ventana.box.x1 - ventana.box.x0) / 2, 1.5, D / 2 - 0.35);
+      box(tm, 1.1, 0.8, 1.0, M(0x3a3f44), 0, 0, 0);                 // cuerpo de la torreta
+      box(tm, 1.14, 0.18, 1.04, M(teamHex), 0, 0.45, 0);            // franja del color del equipo
+      box(tm, 0.22, 0.22, 1.9, M(0x111111), 0, 0.1, 1.3);           // cañón hacia el frente
+      box(tm, 0.5, 0.5, 0.5, M(0x555b61), 0, 0.6, -0.1);            // soporte del cañón
       g00.add(tm);
       turrets.push({ b, chunk: ventana, mesh: tm, team: b.z < 0 ? 'ally' : 'enemy', cd: rnd(0, 0.5) });
     }
@@ -347,8 +350,9 @@
       for (const o of offs) slots.push({ x: x + o[0], z: z + o[1], hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null });
       // Puntos INTERIORES: la IA entra por la puerta y se pone en la sala (protegida por las paredes)
       if (!T.warehouse) {
-        slots.push({ x: x - W / 4, z: z + D / 2 - 1.6, hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null, inside: true });
-        slots.push({ x: x + W / 4, z: z + D / 2 - 1.6, hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null, inside: true });
+        const zIn = z + (D / 2 - 3.0) + 1.5;   // centro de la sala delantera, lejos del tabique y de la pared
+        slots.push({ x: x - W / 4, z: zIn, hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null, inside: true });
+        slots.push({ x: x + W / 4, z: zIn, hx: x, hz: z, dz: D / 2, dx: W / 2, occ: null, inside: true });
       }
       hl.push({ x, z, slots });
     }
@@ -679,5 +683,5 @@
   };
 
   window.CasasSystem = { version: '3.0', buildings, blast, clearAll, buildLots, layoutLots, layoutDefault, hideBaseHouses };
-  console.log('Mod Casas Destructibles v3.0 listo.');
+  console.log('Mod Casas Destructibles v4.0 (torretas, interiores) listo.');
 })();
