@@ -51,6 +51,8 @@
     { name: 'Tienda',        W: 12, D: 8,  floors: 1, wall: 0xd0c0a0, roof: 'flat',  shop: true },
     { name: 'Almacen',       W: 12, D: 10, floors: 1, wall: 0x7d8a94, roof: 'flat',  warehouse: true, fh: 5.5 },
     { name: 'Oficinas',      W: 10, D: 9,  floors: 3, wall: 0x9aa5b0, roof: 'flat',  glassy: true, ac: true },
+    { name: 'Torre',         W: 7,  D: 7,  floors: 6, wall: 0xa9b6c4, roof: 'flat',  glassy: true, ac: true, balc: true },
+    { name: 'Bloque grande', W: 14, D: 12, floors: 3, wall: 0xc7bca8, roof: 'flat',  ac: true, balc: true },
   ];
 
   // ===================== MATERIALES Y GEOMETRÍA (compartidos) =====================
@@ -598,7 +600,7 @@
       const far = Math.max(Math.abs(x), Math.abs(z)) >= 100;
       if (mode === 'ciudad') {
         if (rnd01() < 0.02) continue;   // ciudad casi llena
-        const pool = far ? [0, 1, 4] : [2, 2, 5, 3, 1];
+        const pool = far ? [0, 1, 4, 7] : [2, 2, 5, 3, 1, 6, 6];
         out.push({ x, z, type: pool[Math.floor(rnd01() * pool.length)] });
       } else {
         if (rnd01() < 0.4) continue;
