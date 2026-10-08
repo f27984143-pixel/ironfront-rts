@@ -29,7 +29,7 @@
     breakSoundGap: 0.12,
   };
 
-  console.log('Mod Casas Destructibles v4.0 (torretas, interiores): iniciando...');
+  console.log('Mod Casas Destructibles v4.1 (torretas, interiores, caídas aéreas): iniciando...');
 
   const buildings = [];
   const turrets = [];
@@ -651,6 +651,20 @@
     }
   }
 
+  // Aviones y helicópteros: el daño cae cuando tocan el suelo (isDead lo marca DLC/mejora al impactar)
+  const crashSeen = new WeakSet();
+  function updateAirCrashes(dt) {
+    const mm = window.MejoraMundo || {};
+    const aire = [].concat(mm.planes || [], mm.helis || [], API.aiHelis || []);
+    for (const u of aire) {
+      if (!u || !u.mesh || crashSeen.has(u)) continue;
+      if (!u.isDead) continue;
+      crashSeen.add(u);
+      blast(V(u.mesh.position.x, 0, u.mesh.position.z), 13, 420);
+      API.playSound && API.playSound('explosion');
+    }
+  }
+
   function applyShake(dt) {
     if (shakeAmount > 0.02) {
       API.camera.position.x += (Math.random() - 0.5) * shakeAmount;
@@ -677,11 +691,12 @@
     updateBuildings(dt);
     resolveProjectiles();
     updateTurrets(dt);
+    updateAirCrashes(dt);
     updateDebris(dt);
     updateFx(dt);
     applyShake(dt);
   };
 
   window.CasasSystem = { version: '3.0', buildings, blast, clearAll, buildLots, layoutLots, layoutDefault, hideBaseHouses };
-  console.log('Mod Casas Destructibles v4.0 (torretas, interiores) listo.');
+  console.log('Mod Casas Destructibles v4.1 (torretas, interiores, caídas aéreas) listo.');
 })();

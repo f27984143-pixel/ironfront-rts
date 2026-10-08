@@ -660,7 +660,7 @@
     if (t < P1) {
       mesh.rotation.x += dt * 0.5;
       mesh.rotation.z += Math.sin(t * 10) * dt * 0.6;
-      mesh.position.y -= dt * 2;
+      mesh.position.y -= dt * (entry.kind === 'heli' ? 1.2 : 2.5);   // helicóptero: descenso lento (autorrotación)
       if (Math.random() < 0.5) spawnCrashSmoke(mesh.position);
     } else if (t < P2) {
       mesh.rotation.y += e.crashSpin * dt;
@@ -668,7 +668,7 @@
       mesh.rotation.x = Math.min(1.4, 0.3 + (t - P1) * 0.4);
       mesh.position.x += e.crashDir.x * dt * 4;
       mesh.position.z += e.crashDir.z * dt * 4;
-      mesh.position.y -= (6 + (t - P1) * 3) * dt;
+      mesh.position.y -= ((entry.kind === 'heli' ? 3.5 : 6) + (t - P1) * (entry.kind === 'heli' ? 1.5 : 3)) * dt;
       spawnCrashSmoke(mesh.position);
       if (Math.random() < 0.7) spawnCrashFire(mesh.position);
     } else {

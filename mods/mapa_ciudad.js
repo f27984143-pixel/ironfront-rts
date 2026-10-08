@@ -83,6 +83,30 @@
       }
     }
   }
+  // Piso de cerámica en todo el terreno (sin pasto), calles ocultas
+  function pisoCeramica() {
+    const cv = document.createElement('canvas'); cv.width = 128; cv.height = 128;
+    const cx = cv.getContext('2d');
+    cx.fillStyle = '#e9e4da'; cx.fillRect(0, 0, 128, 128);
+    cx.fillStyle = '#ded8cb'; cx.fillRect(8, 8, 48, 48); cx.fillRect(72, 72, 48, 48);
+    cx.strokeStyle = '#b3ab9d'; cx.lineWidth = 3; cx.strokeRect(1.5, 1.5, 125, 125);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(100, 100);   // baldosa de 4 m sobre 400 m
+    API.scene.traverse(o => {
+      if (o.name === 'ground' && o.material) o.material = new THREE.MeshLambertMaterial({ map: tex });
+      const p = o.geometry && o.geometry.parameters;
+      if (p && p.width === 12 && (p.height === 400 || p.height === 325)) o.visible = false;   // calles de tierra
+    });
+  }
+  // Árboles de mejora_mundo: se quitan de la escena y de la lista
+  function quitarArbolesMejora() {
+    const trees = window.MejoraMundo && window.MejoraMundo.trees;
+    if (!Array.isArray(trees)) return 0;
+    let n = 0;
+    for (const t of trees) { if (t && t.mesh) { API.scene.remove(t.mesh); n++; } }
+    trees.length = 0;
+    return n;
+  }
   function quitarAviones() {
     // Aviones y helicópteros de mejora_mundo (listas expuestas en window.MejoraMundo)
     const mm = window.MejoraMundo;
@@ -122,6 +146,8 @@
 
     // 3) Escenario: solo edificios
     ocultarVerdes();
+    quitarArbolesMejora();
+    pisoCeramica();
     ocultarAeropuertos();
     quitarAviones();
     const btnA = document.getElementById('btn-airstrike');
