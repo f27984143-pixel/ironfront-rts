@@ -71,5 +71,44 @@
       console.log(`Arreglos de mapa: ${a} árboles base y ${b} de mejora quitados del agua`);
     }
   }, 200);
-  window.ArreglosMapa = { limpiarInstanciados, limpiarMejora, enAgua };
+  // ===================== DESATASCAR =====================
+  // Si una unidad quedó dentro de un colisionador (casa, árbol), no puede moverse:
+  // la sacamos al punto libre más cercano.
+  function colisiona(x, z, r) {
+    return typeof window.isColliding === 'function' && window.isColliding({ x, y: 0, z }, r);
+  }
+  function desatascar() {
+    const listas = [API.soldiers, API.vehicles, API.tanks];
+    let n = 0;
+    for (const lista of listas) {
+      if (!Array.isArray(lista)) continue;
+      for (const u of lista) {
+        if (!u || !u.mesh || u.hp <= 0 || u.isDead || u.inHeli) continue;
+        const p = u.mesh.position, r = u.radius || 1;
+        if (!colisiona(p.x, p.z, r)) continue;
+        let libre = false;
+        for (let d = 1.5; d <= 16 && !libre; d += 1.5) {
+          for (let a = 0; a < 16 && !libre; a++) {
+            const ang = (a / 16) * Math.PI * 2;
+            const x = p.x + Math.cos(ang) * d, z = p.z + Math.sin(ang) * d;
+            if (Math.abs(x) <= 128 && !colisiona(x, z, r)) {
+              p.x = x; p.z = z;
+              if (u.target) u.target.set(x, u.target.y, z);
+              libre = true; n++;
+            }
+          }
+        }
+      }
+    }
+    return n;
+  }
+  let acc = 0;
+  const prevOnUpdate = API.onUpdate;
+  API.onUpdate = function (dt) {
+    if (typeof prevOnUpdate === 'function') { try { prevOnUpdate(dt); } catch (e) { console.error(e); } }
+    acc += dt;
+    if (acc > 0.5) { acc = 0; const n = desatascar(); if (n) console.log('Desatascadas:', n); }
+  };
+
+  window.ArreglosMapa = { limpiarInstanciados, limpiarMejora, enAgua, desatascar };
 })();

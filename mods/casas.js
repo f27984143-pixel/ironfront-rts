@@ -528,9 +528,12 @@
   const LOT_X = [-117, -91, -65, -39, -13, 13, 39, 65, 91, 117];
   const LOT_Z = [-117, -91, -65, -39, -13, 13, 91, 117];
   function mulberry(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t2 = Math.imul(a ^ a >>> 15, 1 | a); t2 = t2 + Math.imul(t2 ^ t2 >>> 7, 61 | t2) ^ t2; return ((t2 ^ t2 >>> 14) >>> 0) / 4294967296; }; }
+  // Zonas donde nacen las tropas del juego: no se construye ahí (si no, las unidades quedan atrapadas)
+  const SPAWNS = [[0, -80], [0, 80], [-30, -70], [30, 70], [-50, -60], [50, 60], [-80, -90], [80, 90]];
   function lotIsFree(x, z) {
     if (z > RIVER.zMin - 8 && z < RIVER.zMax + 8) return false;   // río y puentes
     if (Math.hypot(x, z) < 30) return false;                      // zona de captura
+    for (const s of SPAWNS) if (Math.hypot(x - s[0], z - s[1]) < 22) return false;
     return true;
   }
   // mode: 'pueblo' (cerca de 60% ocupado, tipos mixtos) | 'ciudad' (casi todo ocupado, más altos)

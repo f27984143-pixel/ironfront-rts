@@ -43,7 +43,7 @@
   .mj-opt small{display:block;font-weight:400;font-size:11px;opacity:.7;margin-top:3px}
   .mj-opt.on{border-color:#4fc3ff;background:#0c4a6e}
   .mj-go{width:100%;margin-top:18px;padding:13px;border:none;border-radius:9px;background:#4fc3ff;color:#001;font-weight:900;font-size:15px;letter-spacing:1px;cursor:pointer}
-  .mj-hud{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:25;background:rgba(0,0,0,.55);color:#fff;
+  .mj-hud{position:fixed;top:46px;left:50%;transform:translateX(-50%);z-index:25;background:rgba(0,0,0,.55);color:#fff;
     font:700 12px sans-serif;padding:5px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.15);pointer-events:none;text-align:center;white-space:nowrap}
   .mj-hud .bar{width:150px;height:5px;background:#374151;border-radius:3px;margin-top:4px;overflow:hidden}
   .mj-hud .bar i{display:block;height:100%;background:linear-gradient(90deg,#f87171,#4ade80);transition:width .3s}
