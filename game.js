@@ -824,9 +824,74 @@ function handleMapClick(e) {
         if (unit.target) unit.target.set(dest.x + offsetX, unit.mesh.position.y, dest.z + offsetZ);
         unit.manualTarget = true;
         unit.playerOrder = true;   // la IA no debe quitarle esta orden
+        if (unit.type === 'soldier' || unit.type === 'tank' || unit.type === 'apc') {
+          const tg = unit.target;
+          unit.route = findPath(unit.mesh.position.x, unit.mesh.position.z, tg.x, tg.z, unit.radius || 1);
+          if (unit.route.length) { const last = unit.route[unit.route.length - 1]; tg.set(last.x, tg.y, last.z); }
+        }
       });
     } else clearSelection();
   }
+}
+
+
+/* ============ RUTAS: A* sobre cuadrícula (rodea edificios, árboles y río) ============ */
+function findPath(sx, sz, tx, tz, r) {
+  const cs = 1.5, M = 25;
+  const minX = Math.max(-150, Math.min(sx, tx) - M), maxX = Math.min(150, Math.max(sx, tx) + M);
+  const minZ = Math.max(-220, Math.min(sz, tz) - M), maxZ = Math.min(220, Math.max(sz, tz) + M);
+  const nx = Math.ceil((maxX - minX) / cs) + 1, nz = Math.ceil((maxZ - minZ) / cs) + 1;
+  if (nx * nz > 90000) return [];
+  const cellX = i => minX + i * cs, cellZ = j => minZ + j * cs;
+  const memo = new Int8Array(nx * nz);   // 0 sin mirar, 1 libre, 2 bloqueada
+  const free = (i, j) => {
+    if (i < 0 || j < 0 || i >= nx || j >= nz) return false;
+    const k = j * nx + i;
+    if (memo[k] === 0) memo[k] = isColliding({ x: cellX(i), y: 1, z: cellZ(j) }, r) ? 2 : 1;
+    return memo[k] === 1;
+  };
+  const si = Math.round((sx - minX) / cs), sj = Math.round((sz - minZ) / cs);
+  const ti = Math.round((tx - minX) / cs), tj = Math.round((tz - minZ) / cs);
+  if (!free(ti, tj)) return [];
+  // Cola de prioridad mínima (montículo binario)
+  const heap = []; const push = n => { heap.push(n); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p].f <= heap[i].f) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, rr = l + 1; let m = i; if (l < heap.length && heap[l].f < heap[m].f) m = l; if (rr < heap.length && heap[rr].f < heap[m].f) m = rr; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  const h = (i, j) => { const dx = Math.abs(i - ti), dz = Math.abs(j - tj); return (dx + dz) + (Math.SQRT2 - 2) * Math.min(dx, dz); };
+  const gScore = new Map(), came = new Map();
+  const key = (i, j) => j * nx + i;
+  gScore.set(key(si, sj), 0);
+  push({ i: si, j: sj, g: 0, f: h(si, sj) });
+  const DIRS = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.414],[1,-1,1.414],[-1,1,1.414],[-1,-1,1.414]];
+  let found = false, expandos = 0;
+  while (heap.length && expandos < 30000) {
+    const cur = pop(); expandos++;
+    const ck = key(cur.i, cur.j);
+    if (cur.g > (gScore.get(ck) ?? Infinity)) continue;
+    if (cur.i === ti && cur.j === tj) { found = true; break; }
+    for (const [di, dj, c] of DIRS) {
+      const ni = cur.i + di, nj = cur.j + dj;
+      if (!free(ni, nj)) continue;
+      if (di && dj && (!free(cur.i + di, cur.j) || !free(cur.i, cur.j + dj))) continue; // no cortar esquinas
+      const ng = cur.g + c, nk = key(ni, nj);
+      if (ng < (gScore.get(nk) ?? Infinity)) {
+        gScore.set(nk, ng); came.set(nk, ck);
+        push({ i: ni, j: nj, g: ng, f: ng + h(ni, nj) });
+      }
+    }
+  }
+  if (!found) return [];
+  const cells = []; let k = key(ti, tj);
+  while (k !== undefined && k !== key(si, sj)) { cells.push({ x: cellX(k % nx), z: cellZ(Math.floor(k / nx)) }); k = came.get(k); }
+  cells.reverse();
+  // Suavizado: quitar puntos intermedios cuando la línea recta está libre
+  const clearLine = (a, b) => { const L = Math.hypot(b.x - a.x, b.z - a.z), n = Math.max(2, Math.ceil(L / 0.8)); for (let s = 1; s < n; s++) { const x = a.x + (b.x - a.x) * s / n, z = a.z + (b.z - a.z) * s / n; if (isColliding({ x, y: 1, z }, r)) return false; } return true; };
+  const out = []; let from = { x: sx, z: sz }, idx = 0;
+  while (idx < cells.length) {
+    let best = idx;
+    for (let q = cells.length - 1; q > idx; q--) if (clearLine(from, cells[q])) { best = q; break; }
+    out.push(cells[best]); from = cells[best]; idx = best + 1;
+  }
+  return out;
 }
 
 function createMoveMarker(x, z) {
@@ -1007,12 +1072,7 @@ function updateAI(delta) {
     if(minDist < 85 && heli.cooldown <= 0) { let aimPoint = closestTarget ? closestTarget.clone() : heli.mesh.position.clone().add(new THREE.Vector3(0,0,-50)); fireProjectile(heli.mesh.position.clone(), aimPoint, heli.team === 'ally' ? 0x00ffff : 0xff3300, 40, heli.team); playSound('shot'); heli.cooldown = 1.0; }
   });
   [tanks, vehicles, soldiers].forEach(group => group.forEach(u => {
-    // ⚠️ NO aplicar IA a la unidad que el jugador controla
-    if (directControlActive && directControlUnit === u) {
-      // Actualizar cooldown aunque esté siendo controlada
-      u.cooldown = Math.max(0, (u.cooldown || 0) - delta);
-      return;
-    }
+    // (La unidad controlada por el jugador usa la rama de control directo más abajo)
     if(u.isDead || u.hp <= 0) {
       u.respawnTimer += delta;
       if(u.marine){ if(u.respawnTimer>6) u.mesh.visible=false; return; }
@@ -1068,12 +1128,17 @@ function updateAI(delta) {
         }
       }
       if (u.team === 'enemy' && !u.manualTarget && !u.cover && !(u.path&&u.path.length) && up.distanceTo(u.target) < (isS?3:6)) u.target.set((Math.random()-0.5)*180, isS?1:0, (Math.random()-0.5)*180);
+      if (u.route && u.route.length) {
+        const w = u.route[0];
+        if (Math.hypot(w.x - up.x, w.z - up.z) < 1.0) u.route.shift();
+        if (u.route.length) u.target.set(u.route[0].x, u.target.y, u.route[0].z);
+      }
       const dir = new THREE.Vector3().subVectors(u.target, up);
       if (dir.length() > (isS?0.5:2)) {
         dir.normalize(); let nextPos = up.clone().add(dir.multiplyScalar(u.speed * delta)); tryMove(u,nextPos);
         if(!closestEnemy && u.turret) { u.mesh.rotation.y=Math.atan2(u.target.x-up.x,u.target.z-up.z); u.turret.rotation.set(0,0,0); } else if(!closestEnemy) { u.mesh.lookAt(u.target.x, up.y, u.target.z); }
       }
-      else { u.manualTarget = false; u.playerOrder = false; }
+      else { u.manualTarget = false; u.playerOrder = false; u.route = null; }
     }
   }));
   updateProjectiles(delta);
