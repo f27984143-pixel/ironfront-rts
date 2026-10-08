@@ -247,6 +247,14 @@
     }
   }
 
+  // Unidades que controla el jugador: la IA no les da órdenes
+  function esJugador(u) {
+    if (!u) return false;
+    if (u.playerOrder) return true;
+    if (typeof selectedUnits !== 'undefined' && selectedUnits.includes(u)) return true;
+    if (API.directControlActive && API.directControlActive() && API.directControlUnit && API.directControlUnit() === u) return true;
+    return false;
+  }
   function asignarObjetivosEscuadron(sq, enemigos) {
     if (!enemigos.length) return;
     // Centroide
@@ -265,7 +273,7 @@
     if (!best) return;
 
     sq.units.forEach(u => {
-      if (!unidadEnemigaViva(u)) return;
+      if (!unidadEnemigaViva(u) || esJugador(u)) return;
       const st = getState(u);
       const mp = u.mesh.position;
       const ep = best.mesh.position;
@@ -292,7 +300,7 @@
 
   // ======================== HUIDA / REAGRUPAR ========================
   function intentarHuida(u, now) {
-    if (u.hp <= 0 || u.isDead) return false;
+    if (u.hp <= 0 || u.isDead || esJugador(u)) return false;
     const st = getState(u);
     if (st.fleeUntil > now) {
       const aliados = API.soldiers.filter(a => a !== u && a.team === u.team && unidadEnemigaViva(a));
@@ -316,7 +324,7 @@
   }
 
   function reagrupar(u, now) {
-    if (u.manualTarget) return;
+    if (u.manualTarget || esJugador(u)) return;
     const st = getState(u);
     if (st.fleeUntil > now) return;
     let minD = 1e9, amigo = null;
