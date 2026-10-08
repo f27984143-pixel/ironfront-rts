@@ -30,5 +30,9 @@
   {
     "archivo": "mods_fix.js",
     "activo": true
+  },
+  {
+    "archivo": "version_badge.js",
+    "activo": true
   }
 ]

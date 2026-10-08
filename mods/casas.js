@@ -697,6 +697,6 @@
     applyShake(dt);
   };
 
-  window.CasasSystem = { version: '3.0', buildings, blast, clearAll, buildLots, layoutLots, layoutDefault, hideBaseHouses };
+  window.CasasSystem = { version: '4.1', buildings, blast, clearAll, buildLots, layoutLots, layoutDefault, hideBaseHouses };
   console.log('Mod Casas Destructibles v4.1 (torretas, interiores, caídas aéreas) listo.');
 })();
