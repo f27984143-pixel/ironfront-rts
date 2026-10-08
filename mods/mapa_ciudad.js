@@ -116,7 +116,7 @@
   }
 
   // ===================== ARRANQUE =====================
-  boton();
+  // El botón de mapa ahora está en el menú de modos (modos_juego.js)
   if (esCiudad) {
     // Espera a que el juego y casas.js estén listos
     let intentos = 0;

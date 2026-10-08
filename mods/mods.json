@@ -4,5 +4,6 @@
   { "archivo": "mejora_mundo.js", "activo": true },
   { "archivo": "casas.js",        "activo": true },
   { "archivo": "ia_mejorada.js",  "activo": true },
-  { "archivo": "mapa_ciudad.js",  "activo": true }
+  { "archivo": "mapa_ciudad.js",  "activo": true },
+  { "archivo": "modos_juego.js",  "activo": true }
 ]
